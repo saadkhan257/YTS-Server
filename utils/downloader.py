@@ -27,7 +27,8 @@ def write_cookie_file_from_header(cookie_header: str) -> str:
         for pair in cookie_header.split(';'):
             try:
                 key, value = pair.strip().split("=", 1)
-                f.write(f".domain.com\tTRUE\t/\tFALSE\t0\t{key}\t{value}\n")
+                # ✅ SCOPING to .youtube.com is essential!
+                f.write(f".youtube.com\tTRUE\t/\tFALSE\t0\t{key}\t{value}\n")
             except:
                 continue
     return path

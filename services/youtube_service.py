@@ -10,14 +10,8 @@ from utils.platform_helper import detect_platform
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
-from pathlib import Path
-
-# === COOKIE CONFIG ===
+# === COOKIE FILE ===
 COOKIE_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cookies', 'yt_cookies.txt'))
-
-# === PROXY + HEADERS CONFIG ===
-PROXY = os.getenv("YTDLP_PROXY", "")  # e.g., socks5://user:pass@ip:port
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.6422.112 Safari/537.36"
 
 # === UTILS ===
 
@@ -47,10 +41,6 @@ def get_video_info(url: str) -> dict:
         'cookiefile': COOKIE_FILE,
         'noplaylist': True,
         'ignoreerrors': True,
-        'proxy': PROXY if PROXY else None,
-        'http_headers': {
-            'User-Agent': USER_AGENT
-        }
     }
 
     try:
@@ -153,10 +143,6 @@ def _start_download(url, format_id, output_filename, label, audio_only=False) ->
                 'noplaylist': True,
                 'merge_output_format': 'mp4' if not audio_only else 'mp3',
                 'cookiefile': COOKIE_FILE,
-                'proxy': PROXY if PROXY else None,
-                'http_headers': {
-                    'User-Agent': USER_AGENT
-                },
                 'progress_hooks': [lambda d: _progress_hook(d, download_id)]
             }
 

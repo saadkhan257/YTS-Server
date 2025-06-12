@@ -20,25 +20,12 @@ _download_locks = {}
 def generate_filename():
     return f"YTSx_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
 
-def write_cookie_file_from_header(cookie_header: str) -> str:
-    path = f"/tmp/yts_cookie_{uuid.uuid4().hex}.txt"
-    with open(path, "w") as f:
-        f.write("# Netscape HTTP Cookie File\n")
-        for pair in cookie_header.split(';'):
-            try:
-                key, value = pair.strip().split("=", 1)
-                # ✅ SCOPING to .youtube.com is essential!
-                f.write(f".youtube.com\tTRUE\t/\tFALSE\t0\t{key}\t{value}\n")
-            except:
-                continue
-    return path
-
 def get_platform_cookie_file(platform: str) -> str:
     filename = f"{platform[:2]}_cookies.txt"
     path = os.path.join(COOKIE_DIR, filename)
     return path if os.path.exists(path) else None
 
-def extract_metadata(url, download_id=None, headers=None):
+def extract_metadata(url, download_id=None):
     if not download_id:
         download_id = str(uuid.uuid4())
     cancel_event = threading.Event()
@@ -51,7 +38,6 @@ def extract_metadata(url, download_id=None, headers=None):
     })
 
     platform = detect_platform(url)
-    cookie_path = None
     ydl_opts = {
         'quiet': True,
         'skip_download': True,
@@ -62,18 +48,12 @@ def extract_metadata(url, download_id=None, headers=None):
     }
 
     try:
-        if headers and 'Cookie' in headers:
-            cookie_path = write_cookie_file_from_header(headers['Cookie'])
-            ydl_opts['cookiefile'] = cookie_path
-            ydl_opts['http_headers'] = headers
-            print(f"[COOKIES] ✅ Using header-based cookie file: {cookie_path}")
+        platform_cookie = get_platform_cookie_file(platform)
+        if platform_cookie:
+            ydl_opts['cookiefile'] = platform_cookie
+            print(f"[COOKIES] ✅ Using default platform cookie file: {platform_cookie}")
         else:
-            platform_cookie = get_platform_cookie_file(platform)
-            if platform_cookie:
-                ydl_opts['cookiefile'] = platform_cookie
-                print(f"[COOKIES] ✅ Using default platform cookie file: {platform_cookie}")
-            else:
-                print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
+            print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
 
         if GLOBAL_PROXY:
             ydl_opts['proxy'] = GLOBAL_PROXY
@@ -84,9 +64,6 @@ def extract_metadata(url, download_id=None, headers=None):
     except Exception as e:
         update_status(download_id, {"status": "cancelled"})
         return {"error": str(e), "download_id": download_id}
-    finally:
-        if cookie_path and os.path.exists(cookie_path):
-            os.remove(cookie_path)
 
     try:
         resolutions, sizes, seen = [], [], set()
@@ -125,15 +102,14 @@ def extract_metadata(url, download_id=None, headers=None):
             "sizes": sizes
         }
 
-    except Exception as e:
+    except Exception:
         return {"error": "❌ Format parse failed.", "download_id": download_id}
 
-def start_download(url, resolution, headers=None, bandwidth_limit=None):
+def start_download(url, resolution, bandwidth_limit=None):
     download_id = str(uuid.uuid4())
     filename = generate_filename()
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
     platform = detect_platform(url)
-    cookie_path = None
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
 
@@ -160,18 +136,12 @@ def start_download(url, resolution, headers=None, bandwidth_limit=None):
                 }]
             }
 
-            if headers and 'Cookie' in headers:
-                cookie_path = write_cookie_file_from_header(headers['Cookie'])
-                ydl_opts['cookiefile'] = cookie_path
-                ydl_opts['http_headers'] = headers
-                print(f"[COOKIES] ✅ Using header-based cookie file: {cookie_path}")
+            platform_cookie = get_platform_cookie_file(platform)
+            if platform_cookie:
+                ydl_opts['cookiefile'] = platform_cookie
+                print(f"[COOKIES] ✅ Using default platform cookie file: {platform_cookie}")
             else:
-                platform_cookie = get_platform_cookie_file(platform)
-                if platform_cookie:
-                    ydl_opts['cookiefile'] = platform_cookie
-                    print(f"[COOKIES] ✅ Using default platform cookie file: {platform_cookie}")
-                else:
-                    print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
+                print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
 
             if bandwidth_limit:
                 ydl_opts['ratelimit'] = bandwidth_limit * 1024
@@ -218,10 +188,6 @@ def start_download(url, resolution, headers=None, bandwidth_limit=None):
                 "status": "error",
                 "error": "❌ Unexpected error."
             })
-
-        finally:
-            if cookie_path and os.path.exists(cookie_path):
-                os.remove(cookie_path)
 
     thread = threading.Thread(target=run, daemon=True)
     _download_threads[download_id] = thread

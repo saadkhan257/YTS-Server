@@ -72,20 +72,12 @@ def fetch_info():
             abort(400, "URL is required.")
         print(f"[INFO] Fetching metadata for: {url}")
 
-        headers = {
-            'Cookie': request.headers.get('Cookie', ''),
-            'User-Agent': request.headers.get('User-Agent', '')
-        }
-
-        print(f"[HEADERS] Cookie: {headers['Cookie'][:100]}...")  # trimmed for safety
-        print(f"[HEADERS] User-Agent: {headers['User-Agent']}")
-
-        video_info = get_video_info(url, headers=headers)
+        video_info = get_video_info(url)
         return Response(json.dumps(video_info), content_type='application/json')
     except Exception as e:
         return jsonify({'error': f'Exception during fetch: {str(e)}'}), 500
 
-# ✅ In-App Browser (WebView) extraction
+# ✅ In-App Browser (WebView) extraction (NOW DEFAULTED TO COOKIE FILE ONLY)
 @app.route('/extract', methods=['POST'])
 def extract_from_webview():
     try:
@@ -95,15 +87,7 @@ def extract_from_webview():
             return jsonify({'error': 'URL is required'}), 400
         print(f"[EXTRACT] Extracting from WebView: {url}")
 
-        headers = {
-            'Cookie': request.headers.get('Cookie', ''),
-            'User-Agent': request.headers.get('User-Agent', '')
-        }
-
-        print(f"[WEBVIEW] Cookie: {headers['Cookie'][:100]}...")
-        print(f"[WEBVIEW] User-Agent: {headers['User-Agent']}")
-
-        return jsonify(get_video_info(url, headers=headers))
+        return jsonify(get_video_info(url))
     except Exception as e:
         return jsonify({'error': f'Failed to extract info: {str(e)}'}), 500
 
@@ -117,20 +101,12 @@ def download():
         if not url or not quality:
             return jsonify({'error': 'Missing URL or quality'}), 400
 
-        headers = {
-            'Cookie': request.headers.get('Cookie', ''),
-            'User-Agent': request.headers.get('User-Agent', '')
-        }
-
         print(f"[DOWNLOAD] Starting for: {url}")
-        print(f"[DOWNLOAD] Cookie: {headers['Cookie'][:100]}...")
-        print(f"[DOWNLOAD] User-Agent: {headers['User-Agent']}")
 
-        download_id = start_download(url, quality, headers=headers)
+        download_id = start_download(url, quality)
         return jsonify({'download_id': download_id, 'status': 'started'})
     except Exception as e:
         return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
-
 
 # ✅ Cancel download
 @app.route('/cancel/<download_id>', methods=['POST'])

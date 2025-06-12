@@ -26,13 +26,17 @@ def resolve_facebook_redirect(url: str) -> str:
         print(f"[FB REDIRECT ERROR] {e}")
         return url
 
-# ✅ Fetch Facebook metadata using yt-dlp (with fallback)
+# ✅ Fetch Facebook metadata using yt-dlp
 def fetch_facebook_info(url: str, request_headers: dict = None) -> dict:
     try:
         real_url = resolve_facebook_redirect(url)
 
         # 🧠 Combine headers
-        cookies_txt = load_cookies_from_file("cookies/fb_cookies.txt")
+        try:
+            cookies_txt = load_cookies_from_file("cookies/fb_cookies.txt")
+        except FileNotFoundError:
+            cookies_txt = ""
+
         final_headers = merge_headers_with_cookie(HEADERS, cookies_txt, request_headers)
 
         ydl_opts = {
@@ -46,8 +50,12 @@ def fetch_facebook_info(url: str, request_headers: dict = None) -> dict:
             info = ydl.extract_info(real_url, download=False)
 
         formats = info.get("formats", [])
+        if not formats:
+            raise Exception("No downloadable formats found.")
+
         seen = set()
-        resolutions, sizes = [], []
+        options = []
+        duration = int(info.get("duration") or 0)
 
         for f in formats:
             height = f.get("height")
@@ -63,23 +71,19 @@ def fetch_facebook_info(url: str, request_headers: dict = None) -> dict:
             filesize = f.get("filesize") or f.get("filesize_approx")
             if not filesize:
                 bitrate = f.get("tbr") or 0
-                duration = info.get("duration") or 0
                 filesize = (bitrate * 1024 * duration) / 8 if bitrate and duration else 0
 
-            sizes.append(f"{round(filesize / 1024 / 1024, 2)}MB" if filesize else "N/A")
-            resolutions.append(label)
-
-        duration_sec = int(info.get("duration") or 0)
+            size_str = f"{round(filesize / 1024 / 1024, 2)}MB" if filesize else "N/A"
+            options.append({"label": label, "size": size_str})
 
         return {
             "platform": "Facebook",
             "title": info.get("title", "Untitled"),
             "thumbnail": info.get("thumbnail"),
-            "resolutions": resolutions,
-            "sizes": sizes,
-            "duration": duration_sec,
+            "duration": duration,
             "uploader": info.get("uploader", "Facebook User"),
-            "videoUrl": url
+            "videoUrl": url,
+            "options": sorted(options, key=lambda o: int(o["label"].replace("p", "")))
         }
 
     except Exception as e:
@@ -94,11 +98,15 @@ def download_facebook(url: str, resolution: str, download_id: str, server_url: s
         output_path = os.path.join(VIDEO_DIR, f"{download_id}.%(ext)s")
 
         # ✅ Load and merge cookies + headers
-        cookies_txt = load_cookies_from_file("cookies/fb_cookies.txt")
+        try:
+            cookies_txt = load_cookies_from_file("cookies/fb_cookies.txt")
+        except FileNotFoundError:
+            cookies_txt = ""
+
         final_headers = merge_headers_with_cookie(HEADERS, cookies_txt, request_headers)
 
         ydl_opts = {
-            'format': f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]/best",
+            'format': f"bestvideo[ext=mp4][height<={height}]+bestaudio[ext=m4a]/best[ext=mp4][height<={height}]/best",
             'outtmpl': output_path,
             'quiet': True,
             'http_headers': final_headers,

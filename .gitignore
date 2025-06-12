@@ -1,0 +1,14 @@
+# Python Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+
+# Cookies (never push again)
+cookies/
+
+# System files
+.DS_Store
+Thumbs.db

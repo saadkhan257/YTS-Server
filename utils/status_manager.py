@@ -1,0 +1,103 @@
+# 📁 utils/status_manager.py
+
+from threading import Lock
+from time import time
+
+_status_map = {}
+_timestamp_map = {}
+_lock = Lock()
+
+DEFAULT_STATUS = {
+    "status": "pending",            # pending / downloading / completed / error / canceled
+    "progress": 0.0,                # percent as float
+    "speed": "0KB/s",              # human-readable
+    "eta": None,                   # estimated time remaining
+    "downloaded": 0,              # bytes
+    "total": 0,                   # bytes
+    "video_url": None,
+    "platform": None,
+    "phase": None,                # e.g., metadata, download, merge
+    "message": None,              # optional human-readable status
+    "error": None,
+    "timestamp": 0,               # last updated
+    "created_at": 0,              # initial creation
+    "completed_at": None          # only if status == completed
+}
+
+
+def _ensure_initialized(download_id: str):
+    if download_id not in _status_map:
+        now = int(time())
+        _status_map[download_id] = DEFAULT_STATUS.copy()
+        _status_map[download_id]["created_at"] = now
+        _timestamp_map[download_id] = now
+
+
+def update_status(download_id: str, data: dict):
+    with _lock:
+        _ensure_initialized(download_id)
+        now = int(time())
+
+        _status_map[download_id].update(data)
+        _status_map[download_id]["timestamp"] = now
+        _timestamp_map[download_id] = now
+
+        if data.get("status") == "completed":
+            _status_map[download_id]["completed_at"] = now
+
+
+def get_status(download_id: str) -> dict:
+    with _lock:
+        _ensure_initialized(download_id)
+        return _status_map.get(download_id, DEFAULT_STATUS.copy())
+
+
+def clear_status(download_id: str):
+    with _lock:
+        _status_map.pop(download_id, None)
+        _timestamp_map.pop(download_id, None)
+
+
+def cleanup_stale_statuses(timeout_seconds=3600):
+    with _lock:
+        now = int(time())
+        stale_ids = [
+            did for did, ts in _timestamp_map.items()
+            if now - ts > timeout_seconds
+        ]
+        for did in stale_ids:
+            _status_map.pop(did, None)
+            _timestamp_map.pop(did, None)
+
+
+def list_all_statuses(include_meta=False) -> dict:
+    with _lock:
+        if include_meta:
+            return {k: v.copy() for k, v in _status_map.items()}
+        else:
+            return {
+                k: {
+                    "status": v["status"],
+                    "progress": v["progress"],
+                    "speed": v["speed"],
+                    "video_url": v["video_url"]
+                }
+                for k, v in _status_map.items()
+            }
+
+
+def mark_error(download_id: str, error_message: str):
+    update_status(download_id, {
+        "status": "error",
+        "error": error_message,
+        "message": "Download failed",
+        "completed_at": int(time())
+    })
+
+
+def mark_cancelled(download_id: str):
+    update_status(download_id, {
+        "status": "canceled",
+        "message": "Download canceled by user",
+        "completed_at": int(time())
+    })

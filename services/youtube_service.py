@@ -5,6 +5,7 @@ import random
 import string
 import yt_dlp
 import traceback
+import tempfile
 
 from config import VIDEO_DIR, SERVER_URL
 from utils.platform_helper import detect_platform, get_cookie_file_for_platform, merge_headers_with_cookie
@@ -25,18 +26,31 @@ def human_readable_size(size_bytes):
         size_bytes /= 1024
     return f"{size_bytes:.1f} TB"
 
+def write_temp_cookie_file(cookie_str):
+    temp = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
+    temp.write(cookie_str)
+    temp.close()
+    return temp.name
+
 # === METADATA FETCHING ===
 
 def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
+    # Determine cookie file
+    if 'Cookie' in (headers or {}):
+        cookie_file = write_temp_cookie_file(headers['Cookie'])
+    else:
+        cookie_file = get_cookie_file_for_platform(platform)
+
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
         'ignoreerrors': True,
-        'http_headers': merged_headers,
+        'cookiefile': cookie_file,
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'http_headers': merged_headers,
     }
 
     try:
@@ -68,7 +82,6 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                     size_bytes = None
             size_str = human_readable_size(size_bytes)
 
-            # Video formats
             if height and vcodec != "none" and ext == "mp4":
                 label = f"{height}p"
                 if label not in seen_res:
@@ -80,7 +93,6 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "height": height
                     })
 
-            # Audio formats
             elif acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
@@ -130,6 +142,11 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
+    if 'Cookie' in (headers or {}):
+        cookie_file = write_temp_cookie_file(headers['Cookie'])
+    else:
+        cookie_file = get_cookie_file_for_platform(platform)
+
     def run():
         update_status(download_id, {
             "status": "starting",
@@ -145,6 +162,7 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                 'quiet': True,
                 'noplaylist': True,
                 'merge_output_format': 'mp4' if not audio_only else 'mp3',
+                'cookiefile': cookie_file,
                 'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id)]
             }

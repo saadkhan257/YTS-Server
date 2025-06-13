@@ -5,22 +5,28 @@ import random
 import string
 import yt_dlp
 import traceback
+import tempfile
 
 from config import VIDEO_DIR, SERVER_URL
-from utils.platform_helper import detect_platform, merge_headers_with_cookie
+from utils.platform_helper import detect_platform, load_cookies_from_file, merge_headers_with_cookie
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
-# Optional global proxy for advanced use (e.g., bypass restrictions)
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
-# Active download state containers
 _download_threads = {}
 _download_locks = {}
 
 def generate_filename():
     return f"YTSx_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
 
+def _prepare_cookie_file(headers, platform):
+    if headers and "Cookie" in headers:
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix="_cookie.txt")
+        temp.write(headers["Cookie"].encode())
+        temp.close()
+        return temp.name
+    return load_cookies_from_file(platform)
 
 def extract_metadata(url, headers=None, download_id=None):
     if not download_id:
@@ -39,6 +45,7 @@ def extract_metadata(url, headers=None, download_id=None):
     print(f"[EXTRACT] Extracting from {platform.capitalize()}: {url}")
 
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
+    cookie_file = _prepare_cookie_file(headers, platform)
 
     ydl_opts = {
         'quiet': True,
@@ -47,6 +54,7 @@ def extract_metadata(url, headers=None, download_id=None):
         'noplaylist': True,
         'extract_flat': False,
         'http_headers': merged_headers,
+        'cookiefile': cookie_file,
         'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
     }
 
@@ -103,7 +111,6 @@ def extract_metadata(url, headers=None, download_id=None):
         print(f"[ERROR] Format parsing failed: {e}")
         return {"error": "❌ Format parse failed.", "download_id": download_id}
 
-
 def start_download(url, resolution, bandwidth_limit=None, headers=None):
     download_id = str(uuid.uuid4())
     filename = generate_filename()
@@ -123,6 +130,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
         try:
             height = resolution.replace("p", "")
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
+            cookie_file = _prepare_cookie_file(headers, platform)
 
             ydl_opts = {
                 'format': f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]",
@@ -131,6 +139,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
                 'noplaylist': True,
                 'quiet': True,
                 'http_headers': merged_headers,
+                'cookiefile': cookie_file,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
@@ -191,7 +200,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
     thread.start()
     return download_id
 
-
 def _progress_hook(d, download_id, cancel_event):
     if cancel_event.is_set():
         raise Exception("Cancelled by user")
@@ -211,7 +219,6 @@ def _progress_hook(d, download_id, cancel_event):
         "speed": speed_str
     })
 
-
 def cancel_download(download_id):
     cancel_event = _download_locks.get(download_id)
     if cancel_event:
@@ -220,16 +227,11 @@ def cancel_download(download_id):
         return True
     return False
 
-
 def pause_download(download_id):
-    # Reserved for future enhancement
     return False
-
 
 def resume_download(download_id):
-    # Reserved for future enhancement
     return False
 
-
-# Alias for frontend compatibility
-get_video_info = extract_metadata
+def get_video_info(url, headers=None, download_id=None):
+    return extract_metadata(url, headers=headers, download_id=download_id)

@@ -4,9 +4,10 @@ import uuid
 import random
 import string
 import yt_dlp
+import traceback
 
 from config import VIDEO_DIR, SERVER_URL
-from utils.platform_helper import detect_platform, get_cookie_file_for_platform
+from utils.platform_helper import detect_platform, get_cookie_file_for_platform, merge_headers_with_cookie
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
@@ -26,15 +27,15 @@ def human_readable_size(size_bytes):
 
 # === METADATA FETCHING ===
 
-def get_video_info(url: str) -> dict:
+def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
-    cookie_file = get_cookie_file_for_platform(platform)
+    merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
         'ignoreerrors': True,
-        'cookiefile': cookie_file if cookie_file else None,
+        'http_headers': merged_headers,
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
     }
 
@@ -102,29 +103,32 @@ def get_video_info(url: str) -> dict:
 
     except Exception as e:
         print(f"[❌ FORMAT PARSING ERROR] {e}")
+        traceback.print_exc()
         return {"error": "❌ Unable to parse available formats."}
 
 # === DOWNLOAD DISPATCHER ===
 
-def download_youtube(url: str, format_id: str, is_audio=False, label="") -> str:
+def download_youtube(url: str, format_id: str, is_audio=False, label="", headers: dict = None) -> str:
     filename = generate_filename()
     extension = 'mp3' if is_audio else 'mp4'
     selected_format = format_id or ('bestaudio' if is_audio else 'best')
+
     return _start_download(
         url=url,
         format_id=selected_format,
         output_filename=f"{filename}.{extension}",
         label=label,
-        audio_only=is_audio
+        audio_only=is_audio,
+        headers=headers
     )
 
 # === WORKER FUNCTION ===
 
-def _start_download(url, format_id, output_filename, label, audio_only=False) -> str:
+def _start_download(url, format_id, output_filename, label, audio_only=False, headers=None) -> str:
     download_id = str(uuid.uuid4())
     output_path = os.path.join(VIDEO_DIR, output_filename)
     platform = detect_platform(url)
-    cookie_file = get_cookie_file_for_platform(platform)
+    merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
     def run():
         update_status(download_id, {
@@ -141,7 +145,7 @@ def _start_download(url, format_id, output_filename, label, audio_only=False) ->
                 'quiet': True,
                 'noplaylist': True,
                 'merge_output_format': 'mp4' if not audio_only else 'mp3',
-                'cookiefile': cookie_file if cookie_file else None,
+                'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id)]
             }
 
@@ -178,6 +182,7 @@ def _start_download(url, format_id, output_filename, label, audio_only=False) ->
 
         except Exception as e:
             print(f"[❌ DOWNLOAD ERROR] {e}")
+            traceback.print_exc()
             update_status(download_id, {
                 "status": "error",
                 "progress": 0,
@@ -191,15 +196,17 @@ def _start_download(url, format_id, output_filename, label, audio_only=False) ->
 # === PROGRESS TRACKING ===
 
 def _progress_hook(d, download_id):
-    if d['status'] == 'downloading':
-        total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1
-        downloaded = d.get('downloaded_bytes', 0)
-        percent = int((downloaded / total) * 100)
-        speed = d.get('speed', 0)
-        speed_str = f"{round(speed / 1024, 1)}KB/s" if speed else "0KB/s"
+    if d.get("status") != "downloading":
+        return
 
-        update_status(download_id, {
-            "status": "downloading",
-            "progress": percent,
-            "speed": speed_str
-        })
+    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1
+    downloaded = d.get('downloaded_bytes', 0)
+    percent = int((downloaded / total) * 100)
+    speed = d.get('speed', 0)
+    speed_str = f"{round(speed / 1024, 1)}KB/s" if speed else "0KB/s"
+
+    update_status(download_id, {
+        "status": "downloading",
+        "progress": percent,
+        "speed": speed_str
+    })

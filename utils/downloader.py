@@ -11,8 +11,10 @@ from utils.platform_helper import detect_platform, merge_headers_with_cookie
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
+# Optional global proxy for advanced use (e.g., bypass restrictions)
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
+# Active download state containers
 _download_threads = {}
 _download_locks = {}
 
@@ -23,6 +25,7 @@ def generate_filename():
 def extract_metadata(url, headers=None, download_id=None):
     if not download_id:
         download_id = str(uuid.uuid4())
+
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
 
@@ -33,8 +36,8 @@ def extract_metadata(url, headers=None, download_id=None):
     })
 
     platform = detect_platform(url)
+    print(f"[EXTRACT] Extracting from {platform.capitalize()}: {url}")
 
-    # Merge in-platform cookie with provided headers
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
     ydl_opts = {
@@ -54,6 +57,7 @@ def extract_metadata(url, headers=None, download_id=None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
+        print(f"[ERROR] Metadata extraction failed: {e}")
         update_status(download_id, {"status": "cancelled"})
         return {"error": str(e), "download_id": download_id}
 
@@ -95,7 +99,8 @@ def extract_metadata(url, headers=None, download_id=None):
             "sizes": sizes
         }
 
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] Format parsing failed: {e}")
         return {"error": "❌ Format parse failed.", "download_id": download_id}
 
 
@@ -117,7 +122,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
 
         try:
             height = resolution.replace("p", "")
-
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
             ydl_opts = {
@@ -171,9 +175,11 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
                 error_msg = "🔐 Login or CAPTCHA required."
             elif "unsupported url" in str(e).lower():
                 error_msg = "❌ Unsupported or invalid video link."
+            print(f"[YT-DLP ERROR] {e}")
             update_status(download_id, {"status": "error", "error": error_msg})
 
         except Exception as e:
+            print(f"[UNEXPECTED ERROR] {e}")
             traceback.print_exc()
             update_status(download_id, {
                 "status": "error",
@@ -214,13 +220,16 @@ def cancel_download(download_id):
         return True
     return False
 
+
 def pause_download(download_id):
-    # Placeholder for future implementation
+    # Reserved for future enhancement
     return False
 
+
 def resume_download(download_id):
-    # Placeholder for future implementation
+    # Reserved for future enhancement
     return False
+
 
 # Alias for frontend compatibility
 get_video_info = extract_metadata

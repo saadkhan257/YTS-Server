@@ -6,12 +6,11 @@ import string
 import yt_dlp
 import traceback
 
-from config import VIDEO_DIR, SERVER_URL, SUPPORTED_PLATFORMS
-from utils.platform_helper import detect_platform
+from config import VIDEO_DIR, SERVER_URL
+from utils.platform_helper import detect_platform, merge_headers_with_cookie
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
-COOKIE_DIR = os.path.join(os.path.dirname(__file__), "..", "cookies")
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
 _download_threads = {}
@@ -20,12 +19,8 @@ _download_locks = {}
 def generate_filename():
     return f"YTSx_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
 
-def get_platform_cookie_file(platform: str) -> str:
-    filename = f"{platform[:2]}_cookies.txt"
-    path = os.path.join(COOKIE_DIR, filename)
-    return path if os.path.exists(path) else None
 
-def extract_metadata(url, download_id=None):
+def extract_metadata(url, headers=None, download_id=None):
     if not download_id:
         download_id = str(uuid.uuid4())
     cancel_event = threading.Event()
@@ -38,29 +33,26 @@ def extract_metadata(url, download_id=None):
     })
 
     platform = detect_platform(url)
+
+    # Merge in-platform cookie with provided headers
+    merged_headers = merge_headers_with_cookie(headers or {}, platform)
+
     ydl_opts = {
         'quiet': True,
         'skip_download': True,
         'forcejson': True,
         'noplaylist': True,
         'extract_flat': False,
+        'http_headers': merged_headers,
         'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
     }
 
+    if GLOBAL_PROXY:
+        ydl_opts['proxy'] = GLOBAL_PROXY
+
     try:
-        platform_cookie = get_platform_cookie_file(platform)
-        if platform_cookie:
-            ydl_opts['cookiefile'] = platform_cookie
-            print(f"[COOKIES] ✅ Using default platform cookie file: {platform_cookie}")
-        else:
-            print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
-
-        if GLOBAL_PROXY:
-            ydl_opts['proxy'] = GLOBAL_PROXY
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-
     except Exception as e:
         update_status(download_id, {"status": "cancelled"})
         return {"error": str(e), "download_id": download_id}
@@ -90,6 +82,7 @@ def extract_metadata(url, download_id=None):
             sizes.append(size_str)
 
         update_status(download_id, {"status": "ready"})
+
         return {
             "download_id": download_id,
             "platform": platform,
@@ -105,7 +98,8 @@ def extract_metadata(url, download_id=None):
     except Exception:
         return {"error": "❌ Format parse failed.", "download_id": download_id}
 
-def start_download(url, resolution, bandwidth_limit=None):
+
+def start_download(url, resolution, bandwidth_limit=None, headers=None):
     download_id = str(uuid.uuid4())
     filename = generate_filename()
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
@@ -123,25 +117,22 @@ def start_download(url, resolution, bandwidth_limit=None):
 
         try:
             height = resolution.replace("p", "")
+
+            merged_headers = merge_headers_with_cookie(headers or {}, platform)
+
             ydl_opts = {
                 'format': f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]",
                 'merge_output_format': 'mp4',
                 'outtmpl': output_path,
                 'noplaylist': True,
                 'quiet': True,
+                'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4'
                 }]
             }
-
-            platform_cookie = get_platform_cookie_file(platform)
-            if platform_cookie:
-                ydl_opts['cookiefile'] = platform_cookie
-                print(f"[COOKIES] ✅ Using default platform cookie file: {platform_cookie}")
-            else:
-                print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
 
             if bandwidth_limit:
                 ydl_opts['ratelimit'] = bandwidth_limit * 1024
@@ -194,6 +185,7 @@ def start_download(url, resolution, bandwidth_limit=None):
     thread.start()
     return download_id
 
+
 def _progress_hook(d, download_id, cancel_event):
     if cancel_event.is_set():
         raise Exception("Cancelled by user")
@@ -213,6 +205,7 @@ def _progress_hook(d, download_id, cancel_event):
         "speed": speed_str
     })
 
+
 def cancel_download(download_id):
     cancel_event = _download_locks.get(download_id)
     if cancel_event:
@@ -222,9 +215,12 @@ def cancel_download(download_id):
     return False
 
 def pause_download(download_id):
+    # Placeholder for future implementation
     return False
 
 def resume_download(download_id):
+    # Placeholder for future implementation
     return False
 
+# Alias for frontend compatibility
 get_video_info = extract_metadata

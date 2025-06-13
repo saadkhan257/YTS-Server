@@ -6,18 +6,14 @@ import string
 import yt_dlp
 
 from config import VIDEO_DIR, SERVER_URL
-from utils.platform_helper import detect_platform
+from utils.platform_helper import detect_platform, get_cookie_file_for_platform
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
-
-# === COOKIE FILE ===
-COOKIE_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cookies', 'yt_cookies.txt'))
 
 # === UTILS ===
 
 def generate_filename():
-    rand = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    return f"YTS-media-{rand}"
+    return f"YTSx_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
 
 def human_readable_size(size_bytes):
     if not size_bytes:
@@ -32,15 +28,14 @@ def human_readable_size(size_bytes):
 
 def get_video_info(url: str) -> dict:
     platform = detect_platform(url)
+    cookie_file = get_cookie_file_for_platform(platform)
 
     ydl_opts = {
-        'outtmpl': 'static/videos/%(title)s.%(ext)s',
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
         'quiet': True,
-        'cookiefile': COOKIE_FILE,
         'noplaylist': True,
         'ignoreerrors': True,
+        'cookiefile': cookie_file if cookie_file else None,
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
     }
 
     try:
@@ -68,10 +63,11 @@ def get_video_info(url: str) -> dict:
             if not size_bytes and tbr and duration:
                 try:
                     size_bytes = int(tbr * 1024 * duration / 8)
-                except Exception:
+                except:
                     size_bytes = None
             size_str = human_readable_size(size_bytes)
 
+            # Video formats
             if height and vcodec != "none" and ext == "mp4":
                 label = f"{height}p"
                 if label not in seen_res:
@@ -83,6 +79,7 @@ def get_video_info(url: str) -> dict:
                         "height": height
                     })
 
+            # Audio formats
             elif acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
@@ -126,6 +123,8 @@ def download_youtube(url: str, format_id: str, is_audio=False, label="") -> str:
 def _start_download(url, format_id, output_filename, label, audio_only=False) -> str:
     download_id = str(uuid.uuid4())
     output_path = os.path.join(VIDEO_DIR, output_filename)
+    platform = detect_platform(url)
+    cookie_file = get_cookie_file_for_platform(platform)
 
     def run():
         update_status(download_id, {
@@ -142,7 +141,7 @@ def _start_download(url, format_id, output_filename, label, audio_only=False) ->
                 'quiet': True,
                 'noplaylist': True,
                 'merge_output_format': 'mp4' if not audio_only else 'mp3',
-                'cookiefile': COOKIE_FILE,
+                'cookiefile': cookie_file if cookie_file else None,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id)]
             }
 

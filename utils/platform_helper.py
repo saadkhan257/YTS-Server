@@ -1,63 +1,70 @@
-# 📁 utils/platform_helper.py
-
 import os
-from urllib.parse import urlparse
-from config import SUPPORTED_PLATFORMS
+import re
 
-COOKIES_DIR = "cookies"
+# === PLATFORM DETECTION ===
 
 def detect_platform(url: str) -> str:
     """
-    Detects the platform based on the input URL.
-    Returns: 'youtube', 'tiktok', 'facebook', 'instagram', or 'unknown'
+    Detects the platform based on known patterns in the URL.
     """
-    if not url or "http" not in url:
-        return "unknown"
+    url = url.lower()
 
-    try:
-        domain = urlparse(url.lower()).netloc
+    platform_patterns = {
+        'youtube': r'(youtube\.com|youtu\.be)',
+        'facebook': r'(facebook\.com|fb\.watch)',
+        'instagram': r'(instagram\.com|instagr\.am)',
+        'tiktok': r'(tiktok\.com)',
+        'twitter': r'(twitter\.com|x\.com)',
+        'threads': r'(threads\.net)',
+    }
 
-        for platform, domains in SUPPORTED_PLATFORMS.items():
-            if domain in domains or any(domain.endswith(f".{d}") for d in domains):
-                return platform
+    for platform, pattern in platform_patterns.items():
+        if re.search(pattern, url):
+            return platform
 
-    except Exception as e:
-        print(f"[PLATFORM DETECTION ERROR] {e}")
+    return 'unknown'
 
-    return "unknown"
+# === COOKIE HANDLING ===
 
-def load_cookies_from_file(path: str) -> str:
+def get_cookie_file_for_platform(platform: str) -> str:
     """
-    Reads raw cookie string from a .txt file.
+    Returns the cookie file path for a given platform.
     """
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
+    filename_map = {
+        'youtube': 'yt_cookies.txt',
+        'facebook': 'fb_cookies.txt',
+        'instagram': 'ig_cookies.txt',
+        'tiktok': 'tt_cookies.txt',
+        'twitter': 'tw_cookies.txt',
+        'threads': 'threads_cookies.txt'
+    }
+
+    fname = filename_map.get(platform)
+    if not fname:
         return ""
 
-def get_default_cookies(platform: str) -> str:
-    """
-    Loads the default cookies for a platform from /cookies/<platform>_cookies.txt
-    """
-    cookie_path = os.path.join(COOKIES_DIR, f"{platform}_cookies.txt")
-    return load_cookies_from_file(cookie_path)
+    cookie_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cookies', fname))
+    return cookie_path if os.path.exists(cookie_path) else ""
 
-def merge_headers_with_cookie(base_headers: dict, cookie_txt: str, override_headers: dict = None) -> dict:
+def merge_headers_with_cookie(headers: dict, platform: str) -> dict:
     """
-    Merge headers with cookie. Headers from override_headers take priority.
+    Merges headers with platform cookie content if provided.
+    Cookie in headers will override local file.
     """
-    headers = base_headers.copy()
-    if override_headers:
-        headers.update(override_headers)
-    if cookie_txt:
-        headers["Cookie"] = cookie_txt
-    return headers
+    merged = headers.copy() if headers else {}
 
-def build_platform_headers(platform: str, base_headers: dict = None, override_headers: dict = None) -> dict:
-    """
-    Constructs headers for a given platform, merging base and user overrides with default cookies.
-    """
-    base_headers = base_headers or {}
-    default_cookies = get_default_cookies(platform)
-    return merge_headers_with_cookie(base_headers, default_cookies, override_headers)
+    # If cookie header is already provided by frontend (from in-app webview), use it
+    if 'Cookie' in merged:
+        return merged
+
+    cookie_file = get_cookie_file_for_platform(platform)
+    if cookie_file and os.path.exists(cookie_file):
+        try:
+            with open(cookie_file, 'r', encoding='utf-8') as f:
+                cookie_text = f.read().strip()
+                if cookie_text:
+                    merged['Cookie'] = cookie_text
+        except Exception as e:
+            print(f"[⚠️ Cookie Read Error] {e}")
+
+    return merged

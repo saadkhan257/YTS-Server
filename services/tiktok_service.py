@@ -8,6 +8,7 @@ from selenium.webdriver.common.by import By
 from config import VIDEO_DIR
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
+from utils.platform_helper import merge_headers_with_cookie, get_cookie_file_for_platform
 
 # ✅ Default headers
 HEADERS = {
@@ -16,28 +17,6 @@ HEADERS = {
         '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
     )
 }
-
-# ✅ Load cookies from file (return path and header)
-def load_tt_cookies(return_path=False) -> dict | tuple:
-    cookie_path = "cookies/tt_cookies.txt"
-    if not os.path.exists(cookie_path):
-        return {} if not return_path else (None, {})
-    try:
-        cookies = {}
-        with open(cookie_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip() or line.startswith("#"):
-                    continue
-                parts = line.strip().split("\t")
-                if len(parts) >= 7:
-                    name, value = parts[5], parts[6]
-                    cookies[name] = value
-        if cookies:
-            cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-            return (cookie_path, {"Cookie": cookie_str}) if return_path else {"Cookie": cookie_str}
-    except Exception as e:
-        print(f"[COOKIE ERROR] Failed to load TikTok cookies: {e}")
-    return {} if not return_path else (None, {})
 
 # ✅ Resolve short URLs
 def resolve_redirect(url: str) -> str:
@@ -80,15 +59,14 @@ def fetch_tiktok_video_url(tiktok_url: str) -> str | None:
 def fetch_tiktok_info(url: str) -> dict:
     try:
         resolved_url = resolve_redirect(url)
-        cookie_file, cookie_headers = load_tt_cookies(return_path=True)
-        merged_headers = HEADERS.copy()
-        merged_headers.update(cookie_headers)
+        headers = merge_headers_with_cookie(HEADERS.copy(), "tiktok")
+        cookie_file = get_cookie_file_for_platform("tiktok")
 
         ydl_opts = {
             'quiet': True,
             'skip_download': True,
             'forcejson': True,
-            'http_headers': merged_headers,
+            'http_headers': headers,
             'socket_timeout': 15,
             'retries': 3
         }
@@ -154,9 +132,8 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
         output_path = os.path.join(VIDEO_DIR, output_file)
 
         format_selector = f"bestvideo[height={height}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-        cookie_file, cookie_headers = load_tt_cookies(return_path=True)
-        merged_headers = HEADERS.copy()
-        merged_headers.update(cookie_headers)
+        headers = merge_headers_with_cookie(HEADERS.copy(), "tiktok")
+        cookie_file = get_cookie_file_for_platform("tiktok")
 
         ydl_opts = {
             'format': format_selector,
@@ -164,7 +141,7 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             'quiet': True,
             'noplaylist': True,
             'merge_output_format': 'mp4',
-            'http_headers': merged_headers,
+            'http_headers': headers,
             'progress_hooks': [lambda d: _progress_hook(d, download_id)],
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',

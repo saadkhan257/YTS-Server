@@ -28,11 +28,10 @@ def _prepare_cookie_file(headers, platform):
         print(f"[COOKIES] 🧠 Temporary cookie file created from headers: {temp.name}")
         return temp.name
 
-    # Fallback to platform-specific cookie
-    path = get_cookie_file_for_platform(platform)
-    if path:
-        print(f"[COOKIES] ✅ Using platform cookie file: {path}")
-        return path
+    fallback = get_cookie_file_for_platform(platform)
+    if fallback:
+        print(f"[COOKIES] ✅ Using fallback cookie file: {fallback}")
+        return fallback
 
     print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
     return None
@@ -51,7 +50,7 @@ def extract_metadata(url, headers=None, download_id=None):
     })
 
     platform = detect_platform(url)
-    print(f"[EXTRACT] Extracting from {platform.capitalize()}: {url}")
+    print(f"[EXTRACT] Extracting from {platform.upper()}: {url}")
 
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
     cookie_file = _prepare_cookie_file(headers, platform)
@@ -68,7 +67,6 @@ def extract_metadata(url, headers=None, download_id=None):
 
     if cookie_file:
         ydl_opts['cookiefile'] = cookie_file
-
     if GLOBAL_PROXY:
         ydl_opts['proxy'] = GLOBAL_PROXY
 
@@ -76,28 +74,26 @@ def extract_metadata(url, headers=None, download_id=None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        print(f"[ERROR] Metadata extraction failed: {e}")
-        update_status(download_id, {"status": "cancelled"})
+        print(f"[EXTRACT ERROR] {e}")
+        update_status(download_id, {"status": "error", "error": str(e)})
         return {"error": str(e), "download_id": download_id}
 
     try:
-        resolutions, sizes, seen = [], [], set()
+        formats = info.get("formats", [])
         duration = info.get("duration", 0)
+        resolutions, sizes, seen = [], [], set()
 
-        for f in info.get("formats", []):
-            ext = f.get("ext")
-            height = f.get("height")
-            vcodec = f.get("vcodec", "")
-            if not height or vcodec == "none" or ext != "mp4":
+        for f in formats:
+            if not f.get("height") or f.get("vcodec") == "none" or f.get("ext") != "mp4":
                 continue
 
-            label = f"{height}p"
+            label = f"{f['height']}p"
             if label in seen:
                 continue
             seen.add(label)
 
             size = f.get("filesize") or f.get("filesize_approx")
-            if not size and duration and f.get("tbr"):
+            if not size and f.get("tbr"):
                 size = (f["tbr"] * 1000 / 8) * duration
             size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
 
@@ -110,17 +106,17 @@ def extract_metadata(url, headers=None, download_id=None):
             "download_id": download_id,
             "platform": platform,
             "title": info.get("title", "Untitled"),
-            "thumbnail": info.get("thumbnail", ""),
-            "uploader": info.get("uploader"),
+            "thumbnail": info.get("thumbnail"),
+            "uploader": info.get("uploader", platform),
             "duration": duration,
             "video_url": url,
             "resolutions": resolutions,
-            "sizes": sizes
+            "sizes": sizes,
         }
 
     except Exception as e:
-        print(f"[ERROR] Format parsing failed: {e}")
-        return {"error": "❌ Format parse failed.", "download_id": download_id}
+        print(f"[FORMAT PARSE ERROR] {e}")
+        return {"error": "❌ Failed to parse formats.", "download_id": download_id}
 
 def start_download(url, resolution, bandwidth_limit=None, headers=None):
     download_id = str(uuid.uuid4())
@@ -145,24 +141,22 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
 
             ydl_opts = {
                 'format': f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]",
-                'merge_output_format': 'mp4',
                 'outtmpl': output_path,
-                'noplaylist': True,
                 'quiet': True,
+                'noplaylist': True,
+                'merge_output_format': 'mp4',
                 'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4'
-                }]
+                }],
             }
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-
             if bandwidth_limit:
                 ydl_opts['ratelimit'] = bandwidth_limit * 1024
-
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
@@ -192,21 +186,19 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
             })
 
         except yt_dlp.utils.DownloadError as e:
-            error_msg = "❌ Download failed."
-            if "Sign in" in str(e) or "captcha" in str(e).lower():
-                error_msg = "🔐 Login or CAPTCHA required."
-            elif "unsupported url" in str(e).lower():
-                error_msg = "❌ Unsupported or invalid video link."
+            msg = str(e).lower()
+            error_msg = (
+                "🔐 Login or CAPTCHA required." if "sign in" in msg or "captcha" in msg else
+                "❌ Unsupported or invalid video link." if "unsupported url" in msg else
+                "❌ Download failed."
+            )
             print(f"[YT-DLP ERROR] {e}")
             update_status(download_id, {"status": "error", "error": error_msg})
 
         except Exception as e:
             print(f"[UNEXPECTED ERROR] {e}")
             traceback.print_exc()
-            update_status(download_id, {
-                "status": "error",
-                "error": "❌ Unexpected error."
-            })
+            update_status(download_id, {"status": "error", "error": "❌ Unexpected error."})
 
     thread = threading.Thread(target=run, daemon=True)
     _download_threads[download_id] = thread
@@ -220,10 +212,10 @@ def _progress_hook(d, download_id, cancel_event):
     if d.get("status") != "downloading":
         return
 
-    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1
-    downloaded = d.get('downloaded_bytes', 0)
+    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
+    downloaded = d.get("downloaded_bytes", 0)
     percent = int((downloaded / total) * 100)
-    speed = d.get('speed', 0)
+    speed = d.get("speed", 0)
     speed_str = f"{round(speed / 1024, 1)}KB/s" if speed else "0KB/s"
 
     update_status(download_id, {
@@ -241,10 +233,10 @@ def cancel_download(download_id):
     return False
 
 def pause_download(download_id):
-    return False
+    return False  # Placeholder for future
 
 def resume_download(download_id):
-    return False
+    return False  # Placeholder for future
 
 def get_video_info(url, headers=None, download_id=None):
     return extract_metadata(url, headers=headers, download_id=download_id)

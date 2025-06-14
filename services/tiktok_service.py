@@ -5,12 +5,11 @@ import requests
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 
-from config import VIDEO_DIR
+from config import VIDEO_DIR, PROXY_URL
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from utils.platform_helper import merge_headers_with_cookie, get_cookie_file_for_platform
 
-# ✅ Default headers
 HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -18,16 +17,15 @@ HEADERS = {
     )
 }
 
-# ✅ Resolve short URLs
 def resolve_redirect(url: str) -> str:
     try:
-        res = requests.get(url, allow_redirects=True, timeout=10, headers=HEADERS)
+        proxies = {'http': PROXY_URL, 'https': PROXY_URL} if PROXY_URL else None
+        res = requests.get(url, allow_redirects=True, timeout=10, headers=HEADERS, proxies=proxies)
         return res.url
     except Exception as e:
         print(f"[TIKTOK] Redirect resolve error: {e}")
         return url
 
-# ✅ Fallback: Selenium fetcher
 def fetch_tiktok_video_url(tiktok_url: str) -> str | None:
     try:
         print(f"🚀 [Selenium] Opening TikTok: {tiktok_url}")
@@ -36,6 +34,11 @@ def fetch_tiktok_video_url(tiktok_url: str) -> str | None:
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-blink-features=AutomationControlled")
+
+        if PROXY_URL:
+            print(f"🌍 [Selenium Proxy] Using: {PROXY_URL}")
+            proxy_host = PROXY_URL.split("@")[-1].replace("http://", "")
+            options.add_argument(f'--proxy-server=http://{proxy_host}')
 
         driver = uc.Chrome(options=options)
         driver.set_page_load_timeout(20)
@@ -55,7 +58,6 @@ def fetch_tiktok_video_url(tiktok_url: str) -> str | None:
         print(f"❌ [Selenium] TikTok fetch failed: {e}")
         return None
 
-# ✅ Fetch TikTok metadata
 def fetch_tiktok_info(url: str) -> dict:
     try:
         resolved_url = resolve_redirect(url)
@@ -68,9 +70,11 @@ def fetch_tiktok_info(url: str) -> dict:
             'forcejson': True,
             'http_headers': headers,
             'socket_timeout': 15,
-            'retries': 3
+            'retries': 3,
         }
 
+        if PROXY_URL:
+            ydl_opts['proxy'] = PROXY_URL
         if cookie_file:
             ydl_opts['cookiefile'] = cookie_file
 
@@ -123,7 +127,6 @@ def fetch_tiktok_info(url: str) -> dict:
         print(f"[TIKTOK] Metadata fetch failed: {e}")
         return {"error": "❌ Could not fetch TikTok info."}
 
-# ✅ Download TikTok video
 def download_tiktok(url: str, resolution: str, download_id: str, server_url: str):
     try:
         resolved_url = resolve_redirect(url)
@@ -151,6 +154,8 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             'retries': 3
         }
 
+        if PROXY_URL:
+            ydl_opts['proxy'] = PROXY_URL
         if cookie_file:
             ydl_opts['cookiefile'] = cookie_file
 
@@ -184,7 +189,6 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             "error": str(e)
         })
 
-# ✅ Progress updater
 def _progress_hook(d, download_id):
     if d['status'] == 'downloading':
         total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1

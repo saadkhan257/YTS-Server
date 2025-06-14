@@ -8,7 +8,7 @@ import traceback
 import tempfile
 
 from config import VIDEO_DIR, SERVER_URL
-from utils.platform_helper import detect_platform, merge_headers_with_cookie
+from utils.platform_helper import detect_platform, merge_headers_with_cookie, get_cookie_file_for_platform
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
@@ -22,17 +22,19 @@ def generate_filename():
 
 def _prepare_cookie_file(headers, platform):
     if headers and "Cookie" in headers:
-        temp = tempfile.NamedTemporaryFile(delete=False, suffix="_cookie.txt")
-        temp.write(headers["Cookie"].encode())
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix="_cookie.txt", mode='w')
+        temp.write(headers["Cookie"])
         temp.close()
+        print(f"[COOKIES] 🧠 Temporary cookie file created from headers: {temp.name}")
         return temp.name
-    # No user header cookie → fallback to default platform cookie file
-    merged = merge_headers_with_cookie({}, platform)
-    if "Cookie" in merged:
-        temp = tempfile.NamedTemporaryFile(delete=False, suffix="_cookie.txt")
-        temp.write(merged["Cookie"].encode())
-        temp.close()
-        return temp.name
+
+    # Fallback to platform-specific cookie
+    path = get_cookie_file_for_platform(platform)
+    if path:
+        print(f"[COOKIES] ✅ Using platform cookie file: {path}")
+        return path
+
+    print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
     return None
 
 def extract_metadata(url, headers=None, download_id=None):

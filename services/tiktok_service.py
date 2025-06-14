@@ -1,4 +1,3 @@
-# tiktok_service.py
 import yt_dlp
 import os
 import time
@@ -18,11 +17,11 @@ HEADERS = {
     )
 }
 
-# ✅ Load cookies from cookies/tt_cookies.txt if exists
-def load_tt_cookies() -> dict:
+# ✅ Load cookies from file (return path and header)
+def load_tt_cookies(return_path=False) -> dict | tuple:
     cookie_path = "cookies/tt_cookies.txt"
     if not os.path.exists(cookie_path):
-        return {}
+        return {} if not return_path else (None, {})
     try:
         cookies = {}
         with open(cookie_path, "r", encoding="utf-8") as f:
@@ -35,12 +34,12 @@ def load_tt_cookies() -> dict:
                     cookies[name] = value
         if cookies:
             cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-            return {"Cookie": cookie_str}
+            return (cookie_path, {"Cookie": cookie_str}) if return_path else {"Cookie": cookie_str}
     except Exception as e:
         print(f"[COOKIE ERROR] Failed to load TikTok cookies: {e}")
-    return {}
+    return {} if not return_path else (None, {})
 
-# ✅ Resolve short URLs (e.g., vt.tiktok.com)
+# ✅ Resolve short URLs
 def resolve_redirect(url: str) -> str:
     try:
         res = requests.get(url, allow_redirects=True, timeout=10, headers=HEADERS)
@@ -49,7 +48,7 @@ def resolve_redirect(url: str) -> str:
         print(f"[TIKTOK] Redirect resolve error: {e}")
         return url
 
-# ✅ Fallback Selenium video fetch
+# ✅ Fallback: Selenium fetcher
 def fetch_tiktok_video_url(tiktok_url: str) -> str | None:
     try:
         print(f"🚀 [Selenium] Opening TikTok: {tiktok_url}")
@@ -81,7 +80,7 @@ def fetch_tiktok_video_url(tiktok_url: str) -> str | None:
 def fetch_tiktok_info(url: str) -> dict:
     try:
         resolved_url = resolve_redirect(url)
-        cookie_headers = load_tt_cookies()
+        cookie_file, cookie_headers = load_tt_cookies(return_path=True)
         merged_headers = HEADERS.copy()
         merged_headers.update(cookie_headers)
 
@@ -93,6 +92,9 @@ def fetch_tiktok_info(url: str) -> dict:
             'socket_timeout': 15,
             'retries': 3
         }
+
+        if cookie_file:
+            ydl_opts['cookiefile'] = cookie_file
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -125,6 +127,7 @@ def fetch_tiktok_info(url: str) -> dict:
 
         except Exception as fallback:
             print(f"[YTDLP ERROR] {fallback} — switching to Selenium...")
+
             selenium_video = fetch_tiktok_video_url(resolved_url)
             if selenium_video:
                 return {
@@ -142,7 +145,7 @@ def fetch_tiktok_info(url: str) -> dict:
         print(f"[TIKTOK] Metadata fetch failed: {e}")
         return {"error": "❌ Could not fetch TikTok info."}
 
-# ✅ TikTok downloader
+# ✅ Download TikTok video
 def download_tiktok(url: str, resolution: str, download_id: str, server_url: str):
     try:
         resolved_url = resolve_redirect(url)
@@ -151,7 +154,7 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
         output_path = os.path.join(VIDEO_DIR, output_file)
 
         format_selector = f"bestvideo[height={height}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-        cookie_headers = load_tt_cookies()
+        cookie_file, cookie_headers = load_tt_cookies(return_path=True)
         merged_headers = HEADERS.copy()
         merged_headers.update(cookie_headers)
 
@@ -170,6 +173,9 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             'socket_timeout': 15,
             'retries': 3
         }
+
+        if cookie_file:
+            ydl_opts['cookiefile'] = cookie_file
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(resolved_url, download=True)
@@ -201,7 +207,7 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             "error": str(e)
         })
 
-# ✅ Download progress updater
+# ✅ Progress updater
 def _progress_hook(d, download_id):
     if d['status'] == 'downloading':
         total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1

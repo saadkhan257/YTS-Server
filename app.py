@@ -27,13 +27,7 @@ start_background_tasks()
 # ✅ Home route
 @app.route('/')
 def home():
-    return '''
-    <h1 style="text-align: center; padding-top: 100px;">🟢 YTS Server 2.3.1 is running.</h1>
-    <p style="text-align: center;">
-        Access it via <a href="https://yts-server.technicalforest.com" target="_blank">yts-server.technicalforest.com</a><br>
-        Powered by <a href="https://technicalforest.com/" target="_blank">Technical Forest</a>.
-    </p>
-    '''
+    return send_from_directory("web/index", "index.html")
 
 # ✅ Serve downloaded videos
 @app.route('/videos/<path:filename>')

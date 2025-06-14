@@ -22,6 +22,7 @@ from utils.platform_helper import (
 )
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
+from services.tiktok_service import extract_info_with_selenium
 
 # Proxy setup
 GLOBAL_PROXY = os.getenv("YTS_PROXY") or None
@@ -95,9 +96,20 @@ def extract_metadata(url, headers=None, download_id=None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        print(f"[EXTRACT ERROR] {e}")
-        update_status(download_id, {"status": "error", "error": str(e)})
-        return {"error": str(e), "download_id": download_id}
+        print(f"[YTDLP ❌] {e}")
+        print(f"[FALLBACK] Trying TikTok extraction with Selenium...")
+
+        if platform == "tiktok":
+            try:
+                info = extract_info_with_selenium(url, headers=headers)
+                print(f"[SELENIUM ✅] Extracted TikTok metadata via browser!")
+            except Exception as se:
+                print(f"[FALLBACK ❌] Selenium also failed: {se}")
+                update_status(download_id, {"status": "error", "error": str(se)})
+                return {"error": str(se), "download_id": download_id}
+        else:
+            update_status(download_id, {"status": "error", "error": str(e)})
+            return {"error": str(e), "download_id": download_id}
 
     try:
         formats = info.get("formats", [])

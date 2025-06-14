@@ -1,18 +1,18 @@
-
 # services/tiktok_service.py
+
 import os
 import time
 import yt_dlp
 import requests
 import traceback
-import uuid
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
-from config import VIDEO_DIR, PROXY_URL
+from config import VIDEO_DIR
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
-from utils.platform_helper import merge_headers_with_cookie, get_cookie_file_for_platform
+from utils.platform_helper import merge_headers_with_cookie
 from breakers.tt_protection_breaker import extract_with_fallbacks
 
 DEFAULT_HEADERS = {
@@ -22,10 +22,6 @@ DEFAULT_HEADERS = {
     )
 }
 
-# services/tiktok_service.py
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-import time
 
 def extract_info_with_selenium(url, headers=None):
     print(f"[TT_FALLBACK] Extracting with Selenium: {url}")
@@ -40,7 +36,7 @@ def extract_info_with_selenium(url, headers=None):
     driver = webdriver.Chrome(options=options)
     driver.get(url)
 
-    time.sleep(5)
+    time.sleep(5)  # Give time for video to load
 
     video_elements = driver.find_elements("tag name", "video")
     video_url = video_elements[0].get_attribute("src") if video_elements else None
@@ -66,12 +62,12 @@ def extract_info_with_selenium(url, headers=None):
 
 def resolve_redirect(url: str) -> str:
     try:
-        proxies = {'http': PROXY_URL, 'https': PROXY_URL} if PROXY_URL else None
-        res = requests.get(url, allow_redirects=True, timeout=10, headers=DEFAULT_HEADERS, proxies=proxies)
+        res = requests.get(url, allow_redirects=True, timeout=10, headers=DEFAULT_HEADERS)
         return res.url
     except Exception as e:
         print(f"[TIKTOK] ⚠️ Redirect resolve error: {e}")
         return url
+
 
 def fetch_tiktok_info(url: str, headers=None) -> dict:
     try:
@@ -107,6 +103,7 @@ def fetch_tiktok_info(url: str, headers=None) -> dict:
     except Exception as e:
         traceback.print_exc()
         return {"error": f"❌ TikTok info fetch failed: {e}"}
+
 
 def download_tiktok(url: str, resolution: str, download_id: str, server_url: str, headers=None):
     try:
@@ -172,9 +169,10 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             "error": str(e)
         })
 
+
 def _progress_hook_manual(downloaded, total, download_id):
     percent = int((downloaded / total) * 100) if total else 0
-    speed = "N/A"  # You can measure time deltas to calculate speed if needed
+    speed = "N/A"
     update_status(download_id, {
         "status": "downloading",
         "progress": percent,

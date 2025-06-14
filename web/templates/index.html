@@ -1,39 +1,306 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YTS Server Developer Console 2.3.1</title>
-  <link rel="stylesheet" href="/static/css/console.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="robots" content="noindex, nofollow">
+  <title>YTSDC v2.3.1</title>
+  <link rel="icon" href="data:," />
+  <style>
+    :root {
+      --bg: #000;
+      --green: #00ff00;
+      --green-dim: #007700;
+      --neon: #00ff00;
+      --font: 'Courier New', monospace;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      background: var(--bg);
+      color: var(--green);
+      font-family: var(--font);
+      height: 100%;
+      overflow: auto;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 255, 0, 0.02),
+        rgba(0, 255, 0, 0.02) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+      z-index: -1;
+      animation: glitch-bg 6s infinite alternate;
+    }
+
+    @keyframes glitch-bg {
+      0% { background-position: 0 0; }
+      100% { background-position: 0 100px; }
+    }
+
+    #loginSection {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle, #000 0%, #050505 100%);
+      animation: fadeIn 1s ease-out;
+      z-index: 999;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.98); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .login-card {
+      width: 400px;
+      padding: 30px;
+      border: 2px solid var(--green);
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.85);
+      box-shadow: 0 0 20px var(--green), inset 0 0 10px #003300;
+      backdrop-filter: blur(6px);
+      text-align: center;
+    }
+
+    .login-card h2 {
+      font-size: 1.8rem;
+      text-shadow: 0 0 8px var(--neon);
+      margin-bottom: 10px;
+    }
+
+    .login-card p {
+      font-size: 1rem;
+      margin-bottom: 20px;
+      color: #0f0;
+      text-shadow: 0 0 4px #0f0;
+    }
+
+    input, button {
+      background: transparent;
+      border: 1px solid var(--green);
+      color: var(--green);
+      padding: 12px;
+      width: 100%;
+      font-family: var(--font);
+      font-size: 1rem;
+      border-radius: 6px;
+      margin-top: 10px;
+      transition: all 0.2s ease-in-out;
+    }
+
+    input:focus, button:focus {
+      outline: none;
+      box-shadow: 0 0 10px var(--neon);
+    }
+
+    button:hover {
+      background: var(--green);
+      color: #000;
+      cursor: pointer;
+    }
+
+    .shake {
+      animation: shake 0.3s;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
+    }
+
+    .blink-cursor::after {
+      content: '|';
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    ::selection {
+      background: var(--green);
+      color: #000;
+    }
+
+    .console-wrapper {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 40px;
+      padding: 40px;
+    }
+
+    .neon-box {
+      padding: 30px;
+      border: 2px solid var(--green);
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.8);
+      box-shadow: 0 0 20px var(--neon), inset 0 0 10px #002200;
+      backdrop-filter: blur(4px);
+      transition: box-shadow 0.3s ease-in-out;
+    }
+
+    .neon-box:hover {
+      box-shadow: 0 0 30px var(--neon), inset 0 0 15px #005500;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      text-shadow: 0 0 15px var(--neon);
+      margin-bottom: 10px;
+    }
+
+    .section-title {
+      margin-top: 30px;
+      padding-bottom: 5px;
+      font-size: 1.3rem;
+      border-bottom: 1px solid var(--green);
+      text-shadow: 0 0 6px var(--green-dim);
+    }
+
+    pre {
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid var(--green);
+      border-radius: 6px;
+      padding: 16px;
+      font-size: 0.9rem;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-top: 10px;
+      box-shadow: inset 0 0 10px #003300;
+    }
+
+    .footer {
+      text-align: center;
+      font-size: 0.8rem;
+      opacity: 0.6;
+      margin-top: 25px;
+    }
+  </style>
 </head>
 <body>
-  <div id="login-screen" class="centered">
-    <div class="login-box">
-      <h1>Welcome to<br><span class="highlight">YTS Server</span><br>Developer Console</h1>
-      <p class="login-desc">Who you are?</p>
-      <form id="login-form">
-        <input type="text" name="username" placeholder="Username" required>
-        <input type="password" name="password" placeholder="Password" required>
-        <button type="submit">Login</button>
-        <div class="error" id="login-error"></div>
-      </form>
-    </div>
-  </div>
 
-  <div id="console-screen" class="hidden">
-    <header>
-      <h2>Developer Console</h2>
-      <button id="logout-btn">Logout</button>
-    </header>
-    <main>
-      <section id="log-output" class="terminal-output"></section>
-    </main>
-    <footer>
-      <input id="cmd-input" type="text" placeholder="Type command & press Enter..." autocomplete="off">
-    </footer>
+<!-- Login Section -->
+<div id="loginSection">
+  <div class="login-card" id="loginBox">
+    <h2 class="blink-cursor">Welcome to YTS Developer Console</h2>
+    <p>Who are you?</p>
+    <input type="text" id="devUser" placeholder="Username..." autocomplete="off">
+    <input type="password" id="devPassword" placeholder="Password...">
+    <button onclick="login()">Enter Console</button>
   </div>
+</div>
 
-  <script src="/static/js/utils.js"></script>
-  <script src="/static/js/console.js"></script>
+<!-- Main Console -->
+<div class="console-wrapper" id="console" style="display:none">
+  <div class="neon-box">
+    <h1>YTS Server Dev Console</h1>
+    <div class="section-title">System Diagnostics</div>
+    <pre>
+[+] Framework   : Flask 3.1.1 | yt-dlp 2025.06.09
+[+] Python      : 3.11.x | Threads Enabled
+[+] Proxy Mode  : Rotating + Header Override
+[+] WebView     : Session Cookie Auth
+[+] Active Mods : youtube_service.py, tiktok_service.py
+[+] Infra       : Gunicorn + NGINX (Ubuntu)</pre>
+
+    <div class="section-title">Run Terminal Command</div>
+    <form id="terminalForm">
+      <input type="text" id="cmdInput" placeholder=">>> Type Python command..." autocomplete="off">
+      <button type="submit">Run</button>
+    </form>
+    <pre id="terminal">>>> Awaiting command...</pre>
+
+    <div class="section-title">Metadata Extraction (/fetch_info)</div>
+    <form id="extractForm">
+      <input type="text" id="urlInput" placeholder="Video URL (YouTube, TikTok, etc.)">
+      <button type="submit">Fetch</button>
+    </form>
+    <pre id="output">>>> Ready for metadata extraction...</pre>
+
+    <div class="footer">© 2025 Technical Forest. Authorized access only.</div>
+  </div>
+</div>
+
+<script>
+  async function login() {
+    const user = document.getElementById("devUser").value.trim();
+    const pass = document.getElementById("devPassword").value.trim();
+    const loginBox = document.getElementById("loginBox");
+
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, password: pass })
+      });
+
+      if (res.ok) {
+        document.getElementById("loginSection").style.display = "none";
+        document.getElementById("console").style.display = "grid";
+      } else {
+        loginBox.classList.add("shake");
+        setTimeout(() => loginBox.classList.remove("shake"), 500);
+      }
+    } catch (e) {
+      alert("Login error: " + e.message);
+    }
+  }
+
+  document.getElementById("extractForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const url = document.getElementById("urlInput").value;
+    const output = document.getElementById("output");
+    output.textContent = "[>] Fetching metadata from /fetch_info...";
+    try {
+      const res = await fetch("/fetch_info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      const data = await res.json();
+      output.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      output.textContent = "[x] Error: " + err.message;
+    }
+  });
+
+  document.getElementById("terminalForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const cmd = document.getElementById("cmdInput").value;
+    const terminal = document.getElementById("terminal");
+    terminal.textContent += `\n>>> ${cmd}`;
+    try {
+      const res = await fetch("/api/exec", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: cmd })
+      });
+      const result = await res.text();
+      terminal.textContent += `\n${result}`;
+      terminal.scrollTop = terminal.scrollHeight;
+    } catch (err) {
+      terminal.textContent += `\n[x] ${err.message}`;
+    }
+  });
+</script>
+
 </body>
 </html>

@@ -18,11 +18,22 @@
       color: #00ff00;
       padding: 30px;
       animation: bgShift 10s ease-in-out infinite alternate;
+      overflow-x: hidden;
     }
 
     @keyframes bgShift {
       0% { background-color: #000000; }
       100% { background-color: #0a0a0a; }
+    }
+
+    @keyframes typing {
+      from { width: 0 }
+      to { width: 100% }
+    }
+
+    @keyframes blink {
+      0%, 100% { border-color: transparent; }
+      50% { border-color: #00ff00; }
     }
 
     .console-box {
@@ -31,6 +42,7 @@
       border-radius: 10px;
       background-color: #010101;
       box-shadow: 0 0 25px rgba(0, 255, 0, 0.6);
+      position: relative;
     }
 
     h1 {
@@ -38,6 +50,11 @@
       margin-bottom: 15px;
       color: #00ff00;
       text-shadow: 0 0 10px #00ff00;
+      white-space: nowrap;
+      overflow: hidden;
+      border-right: 2px solid #00ff00;
+      width: 25ch;
+      animation: typing 3s steps(25) 1, blink 1s step-end infinite;
     }
 
     .info, .section-title, pre, .footer {
@@ -63,7 +80,7 @@
       margin-top: 10px;
     }
 
-    input[type="text"] {
+    input[type="text"], input[type="password"] {
       background: #000;
       border: 1px solid #00ff00;
       padding: 10px;
@@ -97,18 +114,54 @@
       font-size: 0.85rem;
       opacity: 0.6;
     }
+
+    .matrix-stream {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #loginSection {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      color: #00ff00;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      z-index: 9999;
+    }
   </style>
 </head>
 <body>
-  <div class="console-box">
-    <h1>YTS Server v2.3.1 - Hacker Console</h1>
+<div id="loginSection">
+  <h2>Enter Dev Access Password</h2>
+  <input type="password" id="devPassword" placeholder="Password...">
+  <button onclick="checkPassword()">Access Console</button>
+</div>
+<div class="matrix-stream"><canvas id="matrixCanvas"></canvas></div>
+<div class="console-box" id="console" style="display:none; position:relative; z-index:1;">
+  <h1>YTS Server v2.3.1 - Hacker Console</h1>
 
-    <div class="info">
-      This is the internal dev console for YTS-Server. Here you can monitor capabilities, test endpoints, and view system specs. Powered by Flask + yt-dlp + NGINX + Gunicorn. Access is restricted to development use only.
-    </div>
+  <div class="info">
+    This is the internal dev console for YTS-Server. Here you can monitor capabilities, test endpoints, and view system specs.
+  </div>
 
-    <div class="section-title">System Diagnostics</div>
-    <pre>
+  <div class="section-title">System Diagnostics</div>
+  <pre>
 Frameworks    : Flask 3.1.1, yt-dlp 2025.06.09
 Python        : 3.11+
 Threading     : Enabled
@@ -117,53 +170,100 @@ Modules       : youtube_service.py, tiktok_service.py
 Endpoints     : /api/extract, /api/download, /cancel
 Proxy Mode    : Active (Rotating)
 Infra         : Gunicorn + NGINX (Ubuntu)
-    </pre>
+  </pre>
 
-    <div class="section-title">Test Backend (/api/extract)</div>
-    <form id="testForm">
-      <input type="text" id="urlInput" placeholder="Paste a video URL (e.g. TikTok, YouTube)">
-      <button type="submit">Run POST /api/extract</button>
-    </form>
+  <div class="section-title">Test Backend (/api/extract)</div>
+  <form id="testForm">
+    <input type="text" id="urlInput" placeholder="Paste a video URL (e.g. TikTok, YouTube)">
+    <button type="submit">Run POST /api/extract</button>
+  </form>
 
-    <pre id="output">Ready for command...</pre>
+  <pre id="output">Ready for command...</pre>
 
-    <div class="section-title">Dev Tips</div>
-    <pre>
+  <div class="section-title">Real-Time Logs</div>
+  <pre id="logOutput">Waiting for stream...</pre>
+
+  <div class="section-title">Dev Tips</div>
+  <pre>
 - Use WebView User-Agent when sending headers
 - TikTok requires mobile headers for successful extraction
 - Send POST { url: "..." } to /api/extract
 - Monitor progress via real-time status manager
 - Files saved in /downloads, naming based on video ID
 - Use /cancel to abort active download threads
-    </pre>
+  </pre>
 
-    <div class="footer">
-      © TechnicalForest. Internal use only. Server logs IP and header for all API interactions.
-    </div>
+  <div class="footer">
+    © TechnicalForest. Internal use only. Server logs IP and header for all API interactions.
   </div>
+</div>
+<script>
+  // Matrix Canvas Effect
+  const canvas = document.getElementById("matrixCanvas");
+  const ctx = canvas.getContext("2d");
+  canvas.height = window.innerHeight;
+  canvas.width = window.innerWidth;
+  const letters = "01".split("");
+  const fontSize = 14;
+  const columns = canvas.width / fontSize;
+  const drops = Array(Math.floor(columns)).fill(1);
+  function drawMatrix() {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0f0";
+    ctx.font = fontSize + "px monospace";
+    for (let i = 0; i < drops.length; i++) {
+      const text = letters[Math.floor(Math.random() * letters.length)];
+      ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+      if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  setInterval(drawMatrix, 50);
 
-  <script>
-    const form = document.getElementById("testForm");
-    const output = document.getElementById("output");
+  // Password Gate
+  function checkPassword() {
+    const pwd = document.getElementById("devPassword").value;
+    if (pwd === "forestpass") {
+      document.getElementById("loginSection").style.display = "none";
+      document.getElementById("console").style.display = "block";
+    } else {
+      alert("Access Denied.");
+    }
+  }
 
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const url = document.getElementById("urlInput").value;
-      output.textContent = "[>] Connecting to /api/extract...";
+  // Test Form
+  const form = document.getElementById("testForm");
+  const output = document.getElementById("output");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const url = document.getElementById("urlInput").value;
+    output.textContent = "[>] Connecting to /api/extract...";
+    try {
+      const res = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      const data = await res.json();
+      output.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      output.textContent = "[x] Error: " + err.message;
+    }
+  });
 
-      try {
-        const res = await fetch("/api/extract", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url })
-        });
-
-        const data = await res.json();
-        output.textContent = JSON.stringify(data, null, 2);
-      } catch (err) {
-        output.textContent = "[x] Error: " + err.message;
-      }
-    });
-  </script>
+  // WebSocket for logs
+  const logOutput = document.getElementById("logOutput");
+  try {
+    const socket = new WebSocket("wss://yts-server.technicalforest.com/logs");
+    socket.onmessage = function(event) {
+      const msg = event.data;
+      logOutput.textContent += `\n> ${msg}`;
+      logOutput.scrollTop = logOutput.scrollHeight;
+    };
+  } catch(e) {
+    logOutput.textContent += "\n[!] WebSocket failed.";
+  }
+</script>
 </body>
 </html>

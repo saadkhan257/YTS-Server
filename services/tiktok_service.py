@@ -1,9 +1,13 @@
+
+# services/tiktok_service.py
 import os
 import time
 import yt_dlp
 import requests
 import traceback
 import uuid
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 from config import VIDEO_DIR, PROXY_URL
 from utils.status_manager import update_status
@@ -17,6 +21,48 @@ DEFAULT_HEADERS = {
         '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
     )
 }
+
+# services/tiktok_service.py
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import time
+
+def extract_info_with_selenium(url, headers=None):
+    print(f"[TT_FALLBACK] Extracting with Selenium: {url}")
+
+    options = Options()
+    options.headless = True
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/117.0.0.0 Safari/537.36")
+
+    driver = webdriver.Chrome(options=options)
+    driver.get(url)
+
+    time.sleep(5)
+
+    video_elements = driver.find_elements("tag name", "video")
+    video_url = video_elements[0].get_attribute("src") if video_elements else None
+
+    driver.quit()
+
+    if not video_url:
+        raise Exception("❌ Failed to extract video URL from TikTok page.")
+
+    return {
+        "title": "TikTok Video",
+        "formats": [{
+            "ext": "mp4",
+            "height": 720,
+            "url": video_url
+        }],
+        "thumbnail": None,
+        "uploader": "TikTok",
+        "duration": None,
+        "webpage_url": url
+    }
+
 
 def resolve_redirect(url: str) -> str:
     try:

@@ -12,6 +12,7 @@ from utils.platform_helper import detect_platform, merge_headers_with_cookie, ge
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
+# Optional: global proxy via env
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
 _download_threads = {}
@@ -25,7 +26,7 @@ def _prepare_cookie_file(headers, platform):
         temp = tempfile.NamedTemporaryFile(delete=False, suffix="_cookie.txt", mode='w')
         temp.write(headers["Cookie"])
         temp.close()
-        print(f"[COOKIES] 🧠 Temporary cookie file created from headers: {temp.name}")
+        print(f"[COOKIES] 🧠 Using header-based cookie file: {temp.name}")
         return temp.name
 
     fallback = get_cookie_file_for_platform(platform)
@@ -116,6 +117,7 @@ def extract_metadata(url, headers=None, download_id=None):
 
     except Exception as e:
         print(f"[FORMAT PARSE ERROR] {e}")
+        update_status(download_id, {"status": "error", "error": "❌ Failed to parse formats."})
         return {"error": "❌ Failed to parse formats.", "download_id": download_id}
 
 def start_download(url, resolution, bandwidth_limit=None, headers=None):
@@ -156,7 +158,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
             if bandwidth_limit:
-                ydl_opts['ratelimit'] = bandwidth_limit * 1024
+                ydl_opts['ratelimit'] = bandwidth_limit * 1024  # KB/s
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
@@ -233,10 +235,10 @@ def cancel_download(download_id):
     return False
 
 def pause_download(download_id):
-    return False  # Placeholder for future
+    return False  # Reserved for future pause logic
 
 def resume_download(download_id):
-    return False  # Placeholder for future
+    return False  # Reserved for future resume logic
 
 def get_video_info(url, headers=None, download_id=None):
     return extract_metadata(url, headers=headers, download_id=download_id)

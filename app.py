@@ -27,7 +27,7 @@ start_background_tasks()
 # ✅ Home route
 @app.route('/')
 def home():
-    return send_from_directory("web/templates", "index.html")
+    return send_from_directory("index.html")
 
 # ✅ Serve downloaded videos
 @app.route('/videos/<path:filename>')

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>YTS Server v2.3.1</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      background: linear-gradient(135deg, #0f0f0f, #1a1a1a);
+      color: #00ffe7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      animation: pulse-bg 10s infinite alternate;
+    }
+
+    @keyframes pulse-bg {
+      0% { background-position: top left; }
+      100% { background-position: bottom right; }
+    }
+
+    .container {
+      width: 95%;
+      max-width: 960px;
+      padding: 40px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 2px solid rgba(0, 255, 231, 0.2);
+      box-shadow: 0 0 30px rgba(0, 255, 231, 0.3);
+      backdrop-filter: blur(10px);
+      border-radius: 18px;
+      transition: all 0.4s ease;
+      animation: fade-in 2s ease;
+    }
+
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(40px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      text-align: center;
+      margin-bottom: 20px;
+      text-shadow: 0 0 12px #00ffe7;
+    }
+
+    .section {
+      margin: 30px 0;
+    }
+
+    h3 {
+      font-size: 1.3rem;
+      margin-bottom: 10px;
+      border-left: 4px solid #00ffe7;
+      padding-left: 12px;
+    }
+
+    code, pre {
+      background: #111;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      display: block;
+      margin-top: 5px;
+      color: #7af8ff;
+    }
+
+    .input-test {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      background: #111;
+      color: #00ffe7;
+      border: 1px solid #00ffe7;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+    }
+
+    input[type="text"]:focus {
+      outline: none;
+      box-shadow: 0 0 10px #00ffe7;
+    }
+
+    button {
+      padding: 12px 20px;
+      background: #00ffe7;
+      border: none;
+      border-radius: 8px;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    button:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 15px #00ffe7;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 30px;
+      color: #888;
+      font-size: 0.85rem;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .status-item {
+      background: #111;
+      padding: 10px 16px;
+      border-left: 3px solid #00ffe7;
+      border-radius: 6px;
+    }
+
+    .status-label {
+      font-weight: bold;
+      color: #00ffe7;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>YTS Server Dashboard v2.3.1</h1>
+
+    <div class="section">
+      <h3>Backend Status</h3>
+      <div class="status-grid">
+        <div class="status-item"><span class="status-label">Flask:</span> 3.1.1</div>
+        <div class="status-item"><span class="status-label">yt-dlp:</span> 2025.06.09</div>
+        <div class="status-item"><span class="status-label">Modules:</span> youtube_service, tiktok_service</div>
+        <div class="status-item"><span class="status-label">Cookie Mode:</span> Ultra Beast Mode</div>
+        <div class="status-item"><span class="status-label">Proxy:</span> Enabled</div>
+        <div class="status-item"><span class="status-label">Platform:</span> Ubuntu + Gunicorn</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Test Backend Endpoint</h3>
+      <form id="testForm" class="input-test">
+        <input type="text" id="videoUrl" placeholder="Paste video URL to test...">
+        <button type="submit">Send</button>
+      </form>
+      <pre id="responseBox">Response output will appear here...</pre>
+    </div>
+
+    <div class="footer">
+      YTS Server &bull; Built for performance &bull; TechnicalForest &bull; No index, no follow
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('testForm');
+    const responseBox = document.getElementById('responseBox');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const url = document.getElementById('videoUrl').value;
+      responseBox.textContent = 'Connecting to backend...';
+      try {
+        const res = await fetch('/api/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const data = await res.json();
+        responseBox.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        responseBox.textContent = 'Backend error: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

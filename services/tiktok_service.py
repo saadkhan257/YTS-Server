@@ -3,13 +3,13 @@ import time
 import yt_dlp
 import requests
 import traceback
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
+import uuid
 
 from config import VIDEO_DIR, PROXY_URL
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from utils.platform_helper import merge_headers_with_cookie, get_cookie_file_for_platform
+from breakers.tt_protection_breaker import extract_with_fallbacks
 
 DEFAULT_HEADERS = {
     'User-Agent': (
@@ -27,102 +27,36 @@ def resolve_redirect(url: str) -> str:
         print(f"[TIKTOK] ⚠️ Redirect resolve error: {e}")
         return url
 
-def fetch_tiktok_video_url_selenium(tiktok_url: str) -> str | None:
-    try:
-        print(f"🚀 [Selenium] Opening TikTok: {tiktok_url}")
-        options = uc.ChromeOptions()
-        options.add_argument("--headless=new")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-
-        if PROXY_URL:
-            proxy_host = PROXY_URL.split("@")[-1].replace("http://", "")
-            options.add_argument(f'--proxy-server=http://{proxy_host}')
-
-        driver = uc.Chrome(options=options)
-        driver.set_page_load_timeout(20)
-        driver.get(tiktok_url)
-        time.sleep(5)
-
-        video_element = driver.find_element(By.TAG_NAME, "video")
-        video_url = video_element.get_attribute("src")
-        driver.quit()
-
-        if not video_url:
-            raise Exception("Video element found, but no URL inside.")
-        print(f"✅ [Selenium] Video URL: {video_url}")
-        return video_url
-
-    except Exception as e:
-        print(f"❌ [Selenium] Failed to fetch video: {e}")
-        return None
-
 def fetch_tiktok_info(url: str, headers=None) -> dict:
     try:
         resolved_url = resolve_redirect(url)
         headers = merge_headers_with_cookie(headers or DEFAULT_HEADERS.copy(), "tiktok")
-        cookie_file = get_cookie_file_for_platform("tiktok")
 
-        ydl_opts = {
-            'quiet': True,
-            'skip_download': True,
-            'forcejson': True,
-            'http_headers': headers,
-            'socket_timeout': 15,
-            'retries': 3
+        info = extract_with_fallbacks(resolved_url, headers)
+        formats = info.get("formats", [])
+        resolutions, sizes, seen = [], [], set()
+        duration = int(info.get("duration", 0))
+
+        for f in formats:
+            if f.get("ext") != "mp4" or not f.get("height"):
+                continue
+            label = f"{f['height']}p"
+            if label in seen:
+                continue
+            seen.add(label)
+            resolutions.append(label)
+            size = f.get("filesize") or f.get("filesize_approx")
+            sizes.append(f"{round(size / 1024 / 1024, 2)}MB" if size else "N/A")
+
+        return {
+            "title": info.get("title", "TikTok Video"),
+            "thumbnail": info.get("thumbnail"),
+            "uploader": info.get("uploader", "TikTok"),
+            "duration": duration,
+            "video_url": resolved_url,
+            "resolutions": resolutions,
+            "sizes": sizes
         }
-
-        if cookie_file:
-            ydl_opts['cookiefile'] = cookie_file
-        if PROXY_URL:
-            ydl_opts['proxy'] = PROXY_URL
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(resolved_url, download=False)
-
-            formats = info.get("formats", [])
-            resolutions, sizes, seen = [], [], set()
-            duration = int(info.get("duration", 0))
-
-            for f in formats:
-                if f.get("ext") != "mp4" or not f.get("height"):
-                    continue
-                label = f"{f['height']}p"
-                if label in seen:
-                    continue
-                seen.add(label)
-                resolutions.append(label)
-                size = f.get("filesize") or f.get("filesize_approx")
-                sizes.append(f"{round(size / 1024 / 1024, 2)}MB" if size else "N/A")
-
-            return {
-                "title": info.get("title", "Untitled TikTok"),
-                "thumbnail": info.get("thumbnail"),
-                "uploader": info.get("uploader", "TikTok"),
-                "duration": duration,
-                "video_url": resolved_url,
-                "resolutions": resolutions,
-                "sizes": sizes
-            }
-
-        except Exception as e:
-            print(f"[YTDLP ERROR] {e} — fallback to Selenium")
-
-            selenium_url = fetch_tiktok_video_url_selenium(resolved_url)
-            if selenium_url:
-                return {
-                    "title": "TikTok Video",
-                    "thumbnail": None,
-                    "uploader": "TikTok",
-                    "duration": 0,
-                    "video_url": selenium_url,
-                    "resolutions": ["720p"],
-                    "sizes": ["N/A"]
-                }
-
-            raise Exception("yt-dlp and Selenium both failed.")
 
     except Exception as e:
         traceback.print_exc()
@@ -131,38 +65,39 @@ def fetch_tiktok_info(url: str, headers=None) -> dict:
 def download_tiktok(url: str, resolution: str, download_id: str, server_url: str, headers=None):
     try:
         resolved_url = resolve_redirect(url)
-        height = resolution.replace("p", "")
+        headers = merge_headers_with_cookie(headers or DEFAULT_HEADERS.copy(), "tiktok")
+        info = extract_with_fallbacks(resolved_url, headers)
+
+        formats = info.get("formats", [])
+        height = int(resolution.replace("p", ""))
+        selected = None
+
+        for f in formats:
+            if f.get("ext") != "mp4" or not f.get("height"):
+                continue
+            if f["height"] == height:
+                selected = f
+                break
+
+        if not selected and formats:
+            selected = formats[0]
+
+        if not selected or "url" not in selected:
+            raise Exception("❌ Suitable video format not found")
+
+        video_url = selected["url"]
         output_file = f"{download_id}.mp4"
         output_path = os.path.join(VIDEO_DIR, output_file)
 
-        headers = merge_headers_with_cookie(headers or DEFAULT_HEADERS.copy(), "tiktok")
-        cookie_file = get_cookie_file_for_platform("tiktok")
-
-        format_selector = f"bestvideo[height={height}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-
-        ydl_opts = {
-            'format': format_selector,
-            'outtmpl': output_path,
-            'quiet': True,
-            'noplaylist': True,
-            'merge_output_format': 'mp4',
-            'http_headers': headers,
-            'progress_hooks': [lambda d: _progress_hook(d, download_id)],
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4'
-            }],
-            'socket_timeout': 15,
-            'retries': 3
-        }
-
-        if cookie_file:
-            ydl_opts['cookiefile'] = cookie_file
-        if PROXY_URL:
-            ydl_opts['proxy'] = PROXY_URL
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.download([resolved_url])
+        r = requests.get(video_url, stream=True, timeout=30)
+        with open(output_path, "wb") as f:
+            downloaded = 0
+            total = int(r.headers.get("Content-Length", 0))
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    _progress_hook_manual(downloaded, total, download_id)
 
         if not os.path.exists(output_path):
             raise Exception("❌ File not found after download")
@@ -191,17 +126,11 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
             "error": str(e)
         })
 
-def _progress_hook(d, download_id):
-    if d['status'] != 'downloading':
-        return
-    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1
-    downloaded = d.get('downloaded_bytes', 0)
-    percent = int((downloaded / total) * 100)
-    speed = d.get('speed', 0)
-    speed_str = f"{round(speed / 1024, 1)}KB/s" if speed else "0KB/s"
-
+def _progress_hook_manual(downloaded, total, download_id):
+    percent = int((downloaded / total) * 100) if total else 0
+    speed = "N/A"  # You can measure time deltas to calculate speed if needed
     update_status(download_id, {
         "status": "downloading",
         "progress": percent,
-        "speed": speed_str
+        "speed": speed
     })

@@ -12,6 +12,9 @@ from utils.platform_helper import detect_platform, get_cookie_file_for_platform,
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
+# === GLOBALS ===
+GLOBAL_PROXY = os.getenv("YTS_PROXY")
+
 # === UTILS ===
 
 def generate_filename():
@@ -38,7 +41,6 @@ def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
-    # Determine cookie file
     if 'Cookie' in (headers or {}):
         cookie_file = write_temp_cookie_file(headers['Cookie'])
     else:
@@ -50,8 +52,11 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         'ignoreerrors': True,
         'cookiefile': cookie_file,
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'http_headers': merged_headers,
+        'http_headers': merged_headers
     }
+
+    if GLOBAL_PROXY:
+        ydl_opts['proxy'] = GLOBAL_PROXY
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -161,7 +166,6 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,
-                'merge_output_format': 'mp4' if not audio_only else 'mp3',
                 'cookiefile': cookie_file,
                 'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id)]
@@ -173,6 +177,12 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }]
+                ydl_opts['merge_output_format'] = 'mp3'
+            else:
+                ydl_opts['merge_output_format'] = 'mp4'
+
+            if GLOBAL_PROXY:
+                ydl_opts['proxy'] = GLOBAL_PROXY
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 print(f"[⏬ START] {output_filename} (format: {format_id})")

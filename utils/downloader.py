@@ -8,7 +8,7 @@ import traceback
 import tempfile
 
 from config import VIDEO_DIR, SERVER_URL
-from utils.platform_helper import detect_platform, load_cookies_from_file, merge_headers_with_cookie
+from utils.platform_helper import detect_platform, merge_headers_with_cookie
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
@@ -26,7 +26,14 @@ def _prepare_cookie_file(headers, platform):
         temp.write(headers["Cookie"].encode())
         temp.close()
         return temp.name
-    return load_cookies_from_file(platform)
+    # No user header cookie → fallback to default platform cookie file
+    merged = merge_headers_with_cookie({}, platform)
+    if "Cookie" in merged:
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix="_cookie.txt")
+        temp.write(merged["Cookie"].encode())
+        temp.close()
+        return temp.name
+    return None
 
 def extract_metadata(url, headers=None, download_id=None):
     if not download_id:
@@ -54,9 +61,11 @@ def extract_metadata(url, headers=None, download_id=None):
         'noplaylist': True,
         'extract_flat': False,
         'http_headers': merged_headers,
-        'cookiefile': cookie_file,
         'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
     }
+
+    if cookie_file:
+        ydl_opts['cookiefile'] = cookie_file
 
     if GLOBAL_PROXY:
         ydl_opts['proxy'] = GLOBAL_PROXY
@@ -139,13 +148,15 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
                 'noplaylist': True,
                 'quiet': True,
                 'http_headers': merged_headers,
-                'cookiefile': cookie_file,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4'
                 }]
             }
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
 
             if bandwidth_limit:
                 ydl_opts['ratelimit'] = bandwidth_limit * 1024

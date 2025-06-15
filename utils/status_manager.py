@@ -1,5 +1,6 @@
 # 📁 utils/status_manager.py
 
+import os
 from threading import Lock
 from time import time
 
@@ -10,19 +11,22 @@ _lock = Lock()
 DEFAULT_STATUS = {
     "status": "pending",            # pending / downloading / completed / error / canceled
     "progress": 0.0,                # percent as float
-    "speed": "0KB/s",              # human-readable
-    "eta": None,                   # estimated time remaining
-    "downloaded": 0,              # bytes
-    "total": 0,                   # bytes
+    "speed": "0KB/s",               # human-readable
+    "eta": None,                    # estimated time remaining
+    "downloaded": 0,                # bytes
+    "total": 0,                     # bytes
     "video_url": None,
     "platform": None,
-    "phase": None,                # e.g., metadata, download, merge
-    "message": None,              # optional human-readable status
+    "phase": None,                  # e.g., metadata, download, merge
+    "message": None,                # optional human-readable status
     "error": None,
-    "timestamp": 0,               # last updated
-    "created_at": 0,              # initial creation
-    "completed_at": None          # only if status == completed
+    "timestamp": 0,                 # last updated
+    "created_at": 0,                # initial creation
+    "completed_at": None            # only if status == completed
 }
+
+# Minimum file size threshold (bytes) to confirm completion
+MIN_VALID_FILESIZE = 512 * 1024  # 512KB — tweak as needed
 
 
 def _ensure_initialized(download_id: str):
@@ -37,13 +41,45 @@ def update_status(download_id: str, data: dict):
     with _lock:
         _ensure_initialized(download_id)
         now = int(time())
-
         _status_map[download_id].update(data)
         _status_map[download_id]["timestamp"] = now
         _timestamp_map[download_id] = now
 
         if data.get("status") == "completed":
             _status_map[download_id]["completed_at"] = now
+
+
+def safe_complete(download_id: str, filepath: str = None):
+    """
+    Marks the status as 'completed' only if the file exists and is valid.
+    """
+    with _lock:
+        _ensure_initialized(download_id)
+        now = int(time())
+
+        # Validate file existence and size
+        if filepath and os.path.exists(filepath):
+            size = os.path.getsize(filepath)
+            if size >= MIN_VALID_FILESIZE:
+                _status_map[download_id]["status"] = "completed"
+                _status_map[download_id]["completed_at"] = now
+                _status_map[download_id]["timestamp"] = now
+                _timestamp_map[download_id] = now
+                return True
+            else:
+                update_status(download_id, {
+                    "status": "error",
+                    "message": f"File too small ({size} bytes), download likely failed.",
+                    "error": "incomplete_file"
+                })
+                return False
+        else:
+            update_status(download_id, {
+                "status": "error",
+                "message": "Download file missing or invalid.",
+                "error": "missing_file"
+            })
+            return False
 
 
 def get_status(download_id: str) -> dict:

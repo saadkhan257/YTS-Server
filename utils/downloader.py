@@ -1,6 +1,3 @@
-# downloader.py (ULTRA BEAST MODE - DEVIL EDITION)
-# 🩸 Over 500 lines. Handles EVERYTHING. DOWNLOAD ANYTHING. ANYWHERE. 🤘
-
 import os
 import re
 import threading
@@ -35,7 +32,7 @@ MP4_EXTENSIONS = {"mp4", "m4v", "mov"}
 SUPPORTED_AUDIO_FORMATS = {"m4a", "mp3", "aac", "opus"}
 MAX_RETRIES = 3
 
-# --- 🔧 Utility Functions ---
+# --- Utility Functions ---
 
 def generate_filename(prefix="YTSx"):
     return f"{prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
@@ -45,7 +42,7 @@ def _prepare_cookie_file(headers, platform):
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=TEMP_COOKIE_SUFFIX, mode='w')
         temp.write(headers["Cookie"])
         temp.close()
-        print(f"[COOKIES] 🧠 Using header-based cookie file: {temp.name}")
+        print(f"[COOKIES] ✨ Using header-based cookie file: {temp.name}")
         return temp.name
 
     fallback = get_cookie_file_for_platform(platform)
@@ -56,7 +53,7 @@ def _prepare_cookie_file(headers, platform):
     print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
     return None
 
-# --- 📥 Metadata Extraction ---
+# --- Metadata Extraction ---
 
 def extract_metadata(url, headers=None, download_id=None):
     if not download_id:
@@ -115,6 +112,14 @@ def extract_metadata(url, headers=None, download_id=None):
         formats = info.get("formats", [])
         duration = info.get("duration", 0)
         resolutions, sizes, seen = [], [], set()
+        dubs = []
+
+        audio_tracks = info.get("audio_tracks", [])
+        for track in audio_tracks:
+            lang_code = track.get("language_code")
+            label = track.get("display_name")
+            if lang_code and label:
+                dubs.append({"lang": lang_code, "label": label})
 
         for f in formats:
             if not f.get("height") or f.get("vcodec") == "none" or f.get("ext") not in MP4_EXTENSIONS:
@@ -145,6 +150,7 @@ def extract_metadata(url, headers=None, download_id=None):
             "video_url": url,
             "resolutions": resolutions,
             "sizes": sizes,
+            "audio_dubs": dubs,
         }
 
     except Exception as e:
@@ -152,9 +158,9 @@ def extract_metadata(url, headers=None, download_id=None):
         update_status(download_id, {"status": "error", "error": "❌ Failed to parse formats."})
         return {"error": "❌ Failed to parse formats.", "download_id": download_id}
 
-# --- 🔽 Video Download ---
+# --- Video Download ---
 
-def start_download(url, resolution, bandwidth_limit=None, headers=None):
+def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
     download_id = str(uuid.uuid4())
     filename = generate_filename()
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
@@ -175,8 +181,13 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
+            base_video = f"bestvideo[ext=mp4][height={height}]"
+            base_audio = f"bestaudio[ext=m4a]"
+            if audio_lang:
+                base_audio += f"[language={audio_lang}]"
+
             ydl_opts = {
-                'format': f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]",
+                'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,
@@ -196,12 +207,22 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
+            start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                print(f"[YTDLP] Starting download for {url}")
                 ydl.download([url])
+            elapsed = time.time() - start_time
+            print(f"[YTDLP] Download finished in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
                 return
+
+            for i in range(20):
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    break
+                print(f"[WAIT] Waiting for file to finalize... {i}")
+                time.sleep(0.5)
 
             if not os.path.exists(output_path):
                 raise FileNotFoundError("Download succeeded but file not found.")
@@ -241,7 +262,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None):
     thread.start()
     return download_id
 
-# --- ⚙️ Progress & Control ---
+# --- Progress Hook & Controls ---
 
 def _progress_hook(d, download_id, cancel_event):
     if cancel_event.is_set():

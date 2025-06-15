@@ -15,6 +15,13 @@ from utils.history_manager import save_to_history
 # === GLOBALS ===
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
+LANGUAGE_MAP = {
+    "en": "English", "es": "Spanish", "fr": "French", "de": "German", "pt": "Portuguese",
+    "hi": "Hindi", "ur": "Urdu", "ru": "Russian", "ja": "Japanese", "ko": "Korean",
+    "tr": "Turkish", "ar": "Arabic", "id": "Indonesian", "it": "Italian", "pl": "Polish",
+    "vi": "Vietnamese", "zh": "Chinese", "fa": "Persian", "bn": "Bengali"
+}
+
 # === UTILS ===
 
 def generate_filename():
@@ -31,43 +38,47 @@ def human_readable_size(size_bytes):
 
 def write_temp_cookie_file(cookie_str):
     temp = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
-    temp.write(cookie_str)
+    temp.write(cookie_str.strip())
     temp.close()
     return temp.name
+
+def map_language_code(code):
+    return LANGUAGE_MAP.get(code.lower(), code.upper())
 
 # === METADATA FETCHING ===
 
 def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
-
-    if 'Cookie' in (headers or {}):
-        cookie_file = write_temp_cookie_file(headers['Cookie'])
-    else:
-        cookie_file = get_cookie_file_for_platform(platform)
-
-    ydl_opts = {
-        'quiet': True,
-        'noplaylist': True,
-        'ignoreerrors': True,
-        'cookiefile': cookie_file,
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'http_headers': merged_headers
-    }
-
-    if GLOBAL_PROXY:
-        ydl_opts['proxy'] = GLOBAL_PROXY
+    temp_cookie_path = None
 
     try:
+        if headers and 'Cookie' in headers:
+            temp_cookie_path = write_temp_cookie_file(headers['Cookie'])
+            cookie_file = temp_cookie_path
+        else:
+            cookie_file = get_cookie_file_for_platform(platform)
+
+        ydl_opts = {
+            'quiet': True,
+            'noplaylist': True,
+            'ignoreerrors': True,
+            'cookiefile': cookie_file,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'http_headers': merged_headers
+        }
+
+        if GLOBAL_PROXY:
+            ydl_opts['proxy'] = GLOBAL_PROXY
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"[❌ METADATA ERROR] {e}")
-        return {"error": "❌ Unable to fetch video information."}
 
-    try:
-        resolutions, audios = [], []
-        seen_res, seen_aud = set(), set()
+        if not info:
+            raise Exception("yt-dlp returned empty info")
+
+        resolutions, audios, dubs = [], [], []
+        seen_res, seen_aud, seen_dubs = set(), set(), set()
         duration = info.get("duration", 0)
 
         for f in info.get("formats", []):
@@ -78,6 +89,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             format_id = f.get("format_id")
             abr = f.get("abr")
             tbr = f.get("tbr")
+            lang_code = f.get("language") or f.get("language_code")
 
             size_bytes = f.get("filesize") or f.get("filesize_approx")
             if not size_bytes and tbr and duration:
@@ -87,6 +99,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                     size_bytes = None
             size_str = human_readable_size(size_bytes)
 
+            # 🎥 Resolutions
             if height and vcodec != "none" and ext == "mp4":
                 label = f"{height}p"
                 if label not in seen_res:
@@ -98,6 +111,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "height": height
                     })
 
+            # 🎧 Normal Audio
             elif acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
@@ -105,6 +119,18 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "label": f"{int(abr)}kbps",
                         "size": size_str,
                         "format_id": format_id
+                    })
+
+            # 🌐 Audio Dubs (multi-language)
+            if acodec != "none" and vcodec == "none" and lang_code:
+                dub_label = map_language_code(lang_code)
+                if dub_label not in seen_dubs:
+                    seen_dubs.add(dub_label)
+                    dubs.append({
+                        "label": dub_label,
+                        "language_code": lang_code,
+                        "format_id": format_id,
+                        "size": size_str
                     })
 
         return {
@@ -115,13 +141,18 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             "duration": duration,
             "video_url": url,
             "resolutions": sorted(resolutions, key=lambda r: int(r["label"].replace("p", ""))),
-            "audios": audios
+            "audios": audios,
+            "audio_dubs": sorted(dubs, key=lambda d: d["label"]) if dubs else []
         }
 
     except Exception as e:
-        print(f"[❌ FORMAT PARSING ERROR] {e}")
+        print(f"[❌ METADATA ERROR] {e}")
         traceback.print_exc()
-        return {"error": "❌ Unable to parse available formats."}
+        return {"error": "❌ Unable to fetch video information."}
+
+    finally:
+        if temp_cookie_path and os.path.exists(temp_cookie_path):
+            os.remove(temp_cookie_path)
 
 # === DOWNLOAD DISPATCHER ===
 
@@ -146,9 +177,11 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
     output_path = os.path.join(VIDEO_DIR, output_filename)
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
+    temp_cookie_path = None
 
-    if 'Cookie' in (headers or {}):
-        cookie_file = write_temp_cookie_file(headers['Cookie'])
+    if headers and 'Cookie' in headers:
+        temp_cookie_path = write_temp_cookie_file(headers['Cookie'])
+        cookie_file = temp_cookie_path
     else:
         cookie_file = get_cookie_file_for_platform(platform)
 
@@ -217,6 +250,10 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                 "speed": "0KB/s",
                 "error": str(e)
             })
+
+        finally:
+            if temp_cookie_path and os.path.exists(temp_cookie_path):
+                os.remove(temp_cookie_path)
 
     threading.Thread(target=run, daemon=True).start()
     return download_id

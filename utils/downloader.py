@@ -114,12 +114,19 @@ def extract_metadata(url, headers=None, download_id=None):
         resolutions, sizes, seen = [], [], set()
         dubs = []
 
-        audio_tracks = info.get("audio_tracks", [])
-        for track in audio_tracks:
-            lang_code = track.get("language_code")
-            label = track.get("display_name")
-            if lang_code and label:
-                dubs.append({"lang": lang_code, "label": label})
+        seen_dubs = set()
+        for f in formats:
+            lang_code = f.get("language") or f.get("language_code")
+            acodec = f.get("acodec")
+            vcodec = f.get("vcodec")
+            if lang_code and acodec != "none" and vcodec == "none":
+                lang = lang_code.lower()
+                if lang not in seen_dubs:
+                    seen_dubs.add(lang)
+                    dubs.append({
+                        "lang": lang,
+                        "label": lang.upper()
+                    })
 
         for f in formats:
             if not f.get("height") or f.get("vcodec") == "none" or f.get("ext") not in MP4_EXTENSIONS:
@@ -184,7 +191,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             base_video = f"bestvideo[ext=mp4][height={height}]"
             base_audio = f"bestaudio[ext=m4a]"
             if audio_lang:
-                base_audio += f"[language={audio_lang}]"
+                base_audio += f"[language^{audio_lang}]"
 
             ydl_opts = {
                 'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",

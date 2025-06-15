@@ -65,7 +65,10 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             'ignoreerrors': True,
             'cookiefile': cookie_file,
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'http_headers': merged_headers
+            'http_headers': merged_headers,
+            'forcejson': True,
+            'extract_flat': False,
+            'dump_single_json': True
         }
 
         if GLOBAL_PROXY:
@@ -90,13 +93,14 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             abr = f.get("abr")
             tbr = f.get("tbr")
             lang_code = f.get("language") or f.get("language_code")
-
             size_bytes = f.get("filesize") or f.get("filesize_approx")
+
             if not size_bytes and tbr and duration:
                 try:
                     size_bytes = int(tbr * 1024 * duration / 8)
                 except:
                     size_bytes = None
+
             size_str = human_readable_size(size_bytes)
 
             # 🎥 Video resolution
@@ -111,7 +115,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "height": height
                     })
 
-            # 🎧 Audio streams
+            # 🎧 Audio quality
             if acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
@@ -121,7 +125,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "format_id": format_id
                     })
 
-            # 🌐 Multilingual dubs
+            # 🌐 Audio dubs (language-based audio streams)
             if acodec != "none" and vcodec == "none" and lang_code:
                 lang = lang_code.lower()
                 if lang not in seen_dub_codes:

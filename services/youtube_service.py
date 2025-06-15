@@ -78,7 +78,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             raise Exception("yt-dlp returned empty info")
 
         resolutions, audios, dubs = [], [], []
-        seen_res, seen_aud, seen_dubs = set(), set(), set()
+        seen_res, seen_aud, seen_dub_codes = set(), set(), set()
         duration = info.get("duration", 0)
 
         for f in info.get("formats", []):
@@ -99,7 +99,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                     size_bytes = None
             size_str = human_readable_size(size_bytes)
 
-            # 🎥 Resolutions
+            # 🎥 Video resolution
             if height and vcodec != "none" and ext == "mp4":
                 label = f"{height}p"
                 if label not in seen_res:
@@ -111,8 +111,8 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "height": height
                     })
 
-            # 🎧 Normal Audio
-            elif acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
+            # 🎧 Audio streams
+            if acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
                     audios.append({
@@ -121,14 +121,14 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "format_id": format_id
                     })
 
-            # 🌐 Audio Dubs (multi-language)
+            # 🌐 Multilingual dubs
             if acodec != "none" and vcodec == "none" and lang_code:
-                dub_label = map_language_code(lang_code)
-                if dub_label not in seen_dubs:
-                    seen_dubs.add(dub_label)
+                lang = lang_code.lower()
+                if lang not in seen_dub_codes:
+                    seen_dub_codes.add(lang)
                     dubs.append({
-                        "label": dub_label,
-                        "language_code": lang_code,
+                        "label": map_language_code(lang),
+                        "language_code": lang,
                         "format_id": format_id,
                         "size": size_str
                     })
@@ -137,12 +137,12 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             "platform": platform,
             "title": info.get("title", "Untitled"),
             "thumbnail": info.get("thumbnail", ""),
-            "uploader": info.get("uploader", "Unknown"),
+            "uploader": info.get("uploader") or info.get("channel") or "Unknown",
             "duration": duration,
             "video_url": url,
             "resolutions": sorted(resolutions, key=lambda r: int(r["label"].replace("p", ""))),
             "audios": audios,
-            "audio_dubs": sorted(dubs, key=lambda d: d["label"]) if dubs else []
+            "audio_dubs": sorted(dubs, key=lambda d: d["label"])
         }
 
     except Exception as e:
@@ -170,7 +170,7 @@ def download_youtube(url: str, format_id: str, is_audio=False, label="", headers
         headers=headers
     )
 
-# === WORKER FUNCTION ===
+# === DOWNLOAD WORKER ===
 
 def _start_download(url, format_id, output_filename, label, audio_only=False, headers=None) -> str:
     download_id = str(uuid.uuid4())

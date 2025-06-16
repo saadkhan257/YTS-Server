@@ -17,11 +17,9 @@ TARGET_DIRS = [VIDEO_DIR, AUDIO_DIR]
 
 def cleanup_old_files():
     print(f"[CLEANUP] 🔁 Hourly cleanup thread started... Watching: {TARGET_DIRS}")
-
     while True:
         for directory in TARGET_DIRS:
             run_cleanup_once(directory)
-
         clean_history_file()
         time.sleep(CLEANUP_INTERVAL)
 
@@ -88,3 +86,8 @@ def clean_history_file():
             print(f"[HISTORY CLEANUP] 🧾 history.json has been cleared.")
     except Exception as e:
         print(f"[HISTORY CLEANUP ERROR] ❌ Failed to clear history.json: {e}")
+
+# 🔥 Minimal on-demand version
+def cleanup_old_videos(directory=VIDEO_DIR):
+    print(f"[CLEANUP] 📼 Manual cleanup: {directory}")
+    run_cleanup_once(directory)

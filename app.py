@@ -8,7 +8,6 @@ from utils.downloader import get_video_info, start_download, cancel_download
 from utils.status_manager import get_status
 from utils.history_manager import load_history
 from utils.cleanup import cleanup_old_files, cleanup_old_videos
-
 # ✅ Initialize Flask App
 app = Flask(__name__)
 CORS(app)

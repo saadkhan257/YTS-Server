@@ -276,7 +276,7 @@ def extract_metadata(url, headers=None, download_id=None):
             "resolutions": resolutions,
             "sizes": sizes,
             "audio_dubs": dubs,
-            "audio_qualities": list(audios.values()),
+            "audioFormats": list(audios.keys()),
         }
 
     except Exception as e:

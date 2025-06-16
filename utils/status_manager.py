@@ -17,16 +17,18 @@ DEFAULT_STATUS = {
     "total": 0,                     # bytes
     "video_url": None,
     "platform": None,
-    "phase": None,                  # e.g., metadata, download, merge
-    "message": None,                # optional human-readable status
+    "phase": None,                  # metadata / download / merge
+    "message": None,                # optional message
     "error": None,
-    "timestamp": 0,                 # last updated
-    "created_at": 0,                # initial creation
-    "completed_at": None            # only if status == completed
+    "timestamp": 0,                 # last update
+    "created_at": 0,                # creation time
+    "completed_at": None,           # when done
+    "file_type": "video",           # video / audio
+    "filename": None                # actual saved filename
 }
 
-# Minimum file size threshold (bytes) to confirm completion
-MIN_VALID_FILESIZE = 512 * 1024  # 512KB — tweak as needed
+# Minimum file size to treat download as valid
+MIN_VALID_FILESIZE = 512 * 1024  # 512KB
 
 
 def _ensure_initialized(download_id: str):
@@ -45,26 +47,26 @@ def update_status(download_id: str, data: dict):
         _status_map[download_id]["timestamp"] = now
         _timestamp_map[download_id] = now
 
+        # Auto-fill completed timestamp if marked
         if data.get("status") == "completed":
             _status_map[download_id]["completed_at"] = now
 
 
 def safe_complete(download_id: str, filepath: str = None):
     """
-    Marks the status as 'completed' only if the file exists and is valid.
+    Safely marks as completed only if the file exists and is valid.
     """
     with _lock:
         _ensure_initialized(download_id)
         now = int(time())
 
-        # Validate file existence and size
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
             if size >= MIN_VALID_FILESIZE:
                 _status_map[download_id]["status"] = "completed"
                 _status_map[download_id]["completed_at"] = now
                 _status_map[download_id]["timestamp"] = now
-                _timestamp_map[download_id] = now
+                _status_map[download_id]["filename"] = os.path.basename(filepath)
                 return True
             else:
                 update_status(download_id, {
@@ -116,7 +118,9 @@ def list_all_statuses(include_meta=False) -> dict:
                     "status": v["status"],
                     "progress": v["progress"],
                     "speed": v["speed"],
-                    "video_url": v["video_url"]
+                    "video_url": v["video_url"],
+                    "file_type": v.get("file_type", "video"),
+                    "filename": v.get("filename")
                 }
                 for k, v in _status_map.items()
             }

@@ -21,6 +21,100 @@ from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from services.tiktok_service import extract_info_with_selenium
 
+
+# --- [ABOVE THIS LINE IS ALL YOUR ORIGINAL IMPORTS & CONSTANTS] ---
+AUDIO_DIR = 'static/audios'
+os.makedirs(AUDIO_DIR, exist_ok=True)
+# ...
+
+# --- Save as Audio (MP3) Download ---
+
+def start_audio_download(url, headers=None, audio_quality='192'):
+    download_id = str(uuid.uuid4())
+    filename = generate_filename(prefix="audio")
+    output_path = os.path.join(AUDIO_DIR, f"{filename}.mp3")
+    platform = detect_platform(url)
+    cancel_event = threading.Event()
+    _download_locks[download_id] = cancel_event
+
+    def run():
+        update_status(download_id, {
+            "status": "starting",
+            "progress": 0,
+            "speed": "0KB/s",
+            "audio_url": None
+        })
+
+        try:
+            merged_headers = merge_headers_with_cookie(headers or {}, platform)
+            cookie_file = _prepare_cookie_file(headers, platform)
+
+            # Match bitrate-specific format
+            format_selector = f"bestaudio[abr={audio_quality}]/bestaudio"
+
+            ydl_opts = {
+                'format': format_selector,
+                'outtmpl': output_path,
+                'quiet': True,
+                'noplaylist': True,
+                'merge_output_format': 'mp3',
+                'http_headers': merged_headers,
+                'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': audio_quality,
+                }],
+            }
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
+            if GLOBAL_PROXY:
+                ydl_opts['proxy'] = GLOBAL_PROXY
+
+            start_time = time.time()
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                print(f"[AUDIO DL] Starting audio download for {url} with quality {audio_quality}K")
+                ydl.download([url])
+            elapsed = time.time() - start_time
+            print(f"[AUDIO DL] Finished in {round(elapsed, 2)}s")
+
+            if cancel_event.is_set():
+                update_status(download_id, {"status": "cancelled"})
+                return
+
+            if not os.path.exists(output_path):
+                raise FileNotFoundError("Audio download succeeded but file not found.")
+
+            update_status(download_id, {
+                "status": "completed",
+                "progress": 100,
+                "speed": "0KB/s",
+                "audio_url": f"{SERVER_URL}/audios/{os.path.basename(output_path)}"
+            })
+
+            save_to_history({
+                "id": download_id,
+                "title": os.path.basename(output_path),
+                "resolution": f"{audio_quality}K",
+                "status": "completed",
+                "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
+            })
+
+        except Exception as e:
+            print(f"[AUDIO ERROR] {e}")
+            traceback.print_exc()
+            update_status(download_id, {"status": "error", "error": "❌ Audio download failed."})
+
+    thread = threading.Thread(target=run, daemon=True)
+    _download_threads[download_id] = thread
+    thread.start()
+    return download_id
+
+
+# --- [Rest of your downloader.py remains unchanged below] ---
+
+
 # Proxy setup
 GLOBAL_PROXY = os.getenv("YTS_PROXY") or None
 _download_threads = {}
@@ -107,13 +201,36 @@ def extract_metadata(url, headers=None, download_id=None):
         else:
             update_status(download_id, {"status": "error", "error": str(e)})
             return {"error": str(e), "download_id": download_id}
-
     try:
         formats = info.get("formats", [])
         duration = info.get("duration", 0)
         resolutions, sizes, seen = [], [], set()
         dubs = []
+        audios = {}
+        audio_seen = set()
 
+        # --- Extract Audio Qualities ---
+        for f in formats:
+            acodec = f.get("acodec")
+            vcodec = f.get("vcodec")
+            abr = f.get("abr")  # in Kbps
+            ext = f.get("ext")
+            if vcodec == "none" and acodec != "none" and abr and ext in SUPPORTED_AUDIO_FORMATS:
+                label = f"{int(abr)}K"
+                if label in audio_seen:
+                    continue
+                audio_seen.add(label)
+                size = f.get("filesize") or f.get("filesize_approx")
+                if not size and f.get("tbr"):
+                    size = (f["tbr"] * 1000 / 8) * duration
+                size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
+                audios[label] = {
+                    "label": label,
+                    "abr": abr,
+                    "size": size_str
+                }
+
+        # --- Extract Audio Dubs ---
         seen_dubs = set()
         for f in formats:
             lang_code = f.get("language") or f.get("language_code")
@@ -128,6 +245,7 @@ def extract_metadata(url, headers=None, download_id=None):
                         "label": lang.upper()
                     })
 
+        # --- Extract Video Resolutions ---
         for f in formats:
             if not f.get("height") or f.get("vcodec") == "none" or f.get("ext") not in MP4_EXTENSIONS:
                 continue
@@ -158,12 +276,14 @@ def extract_metadata(url, headers=None, download_id=None):
             "resolutions": resolutions,
             "sizes": sizes,
             "audio_dubs": dubs,
+            "audio_qualities": list(audios.values()),
         }
 
     except Exception as e:
         print(f"[FORMAT PARSE ERROR] {e}")
         update_status(download_id, {"status": "error", "error": "❌ Failed to parse formats."})
         return {"error": "❌ Failed to parse formats.", "download_id": download_id}
+
 
 # --- Video Download ---
 

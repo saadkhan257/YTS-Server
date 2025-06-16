@@ -7,12 +7,11 @@ import yt_dlp
 import traceback
 import tempfile
 
-from config import VIDEO_DIR, SERVER_URL
+from config import VIDEO_DIR, AUDIO_DIR, SERVER_URL
 from utils.platform_helper import detect_platform, get_cookie_file_for_platform, merge_headers_with_cookie
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
-# === GLOBALS ===
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
 LANGUAGE_MAP = {
@@ -21,8 +20,6 @@ LANGUAGE_MAP = {
     "tr": "Turkish", "ar": "Arabic", "id": "Indonesian", "it": "Italian", "pl": "Polish",
     "vi": "Vietnamese", "zh": "Chinese", "fa": "Persian", "bn": "Bengali"
 }
-
-# === UTILS ===
 
 def generate_filename():
     return f"YTSx_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
@@ -45,7 +42,7 @@ def write_temp_cookie_file(cookie_str):
 def map_language_code(code):
     return LANGUAGE_MAP.get(code.lower(), code.upper())
 
-# === METADATA FETCHING ===
+# === METADATA ===
 
 def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
@@ -53,11 +50,8 @@ def get_video_info(url: str, headers: dict = None) -> dict:
     temp_cookie_path = None
 
     try:
-        if headers and 'Cookie' in headers:
-            temp_cookie_path = write_temp_cookie_file(headers['Cookie'])
-            cookie_file = temp_cookie_path
-        else:
-            cookie_file = get_cookie_file_for_platform(platform)
+        cookie_file = (write_temp_cookie_file(headers['Cookie']) if headers and 'Cookie' in headers
+                       else get_cookie_file_for_platform(platform))
 
         ydl_opts = {
             'quiet': True,
@@ -103,7 +97,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
 
             size_str = human_readable_size(size_bytes)
 
-            # 🎥 Video resolution
+            # 🎥 Video
             if height and vcodec != "none" and ext == "mp4":
                 label = f"{height}p"
                 if label not in seen_res:
@@ -115,7 +109,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "height": height
                     })
 
-            # 🎧 Audio quality
+            # 🎧 Audio
             if acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
@@ -125,7 +119,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "format_id": format_id
                     })
 
-            # 🌐 Audio dubs (language-based audio streams)
+            # 🌐 Audio Dubs
             if acodec != "none" and vcodec == "none" and lang_code:
                 lang = lang_code.lower()
                 if lang not in seen_dub_codes:
@@ -158,12 +152,14 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         if temp_cookie_path and os.path.exists(temp_cookie_path):
             os.remove(temp_cookie_path)
 
-# === DOWNLOAD DISPATCHER ===
+# === PUBLIC DOWNLOAD DISPATCHER ===
 
 def download_youtube(url: str, format_id: str, is_audio=False, label="", headers: dict = None) -> str:
     filename = generate_filename()
     extension = 'mp3' if is_audio else 'mp4'
     selected_format = format_id or ('bestaudio' if is_audio else 'best')
+    outdir = AUDIO_DIR if is_audio else VIDEO_DIR
+    outurl = f"{SERVER_URL}/audios/{filename}.{extension}" if is_audio else f"{SERVER_URL}/videos/{filename}.{extension}"
 
     return _start_download(
         url=url,
@@ -171,14 +167,17 @@ def download_youtube(url: str, format_id: str, is_audio=False, label="", headers
         output_filename=f"{filename}.{extension}",
         label=label,
         audio_only=is_audio,
-        headers=headers
+        headers=headers,
+        output_dir=outdir,
+        file_url=outurl,
+        file_type='audio' if is_audio else 'video'
     )
 
-# === DOWNLOAD WORKER ===
+# === INTERNAL THREAD WORKER ===
 
-def _start_download(url, format_id, output_filename, label, audio_only=False, headers=None) -> str:
+def _start_download(url, format_id, output_filename, label, audio_only, headers, output_dir, file_url, file_type) -> str:
     download_id = str(uuid.uuid4())
-    output_path = os.path.join(VIDEO_DIR, output_filename)
+    output_path = os.path.join(output_dir, output_filename)
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
     temp_cookie_path = None
@@ -194,7 +193,8 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
             "status": "starting",
             "progress": 0,
             "speed": "0KB/s",
-            "video_url": None
+            "video_url": None,
+            "file_type": file_type
         })
 
         try:
@@ -232,7 +232,8 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                 "status": "completed",
                 "progress": 100,
                 "speed": "0KB/s",
-                "video_url": f"{SERVER_URL}/videos/{output_filename}"
+                "video_url": file_url,
+                "file_type": file_type
             })
 
             save_to_history({
@@ -240,7 +241,8 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                 "title": info.get("title", "Untitled"),
                 "resolution": label or format_id,
                 "status": "completed",
-                "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
+                "size": round(os.path.getsize(output_path) / 1024 / 1024, 2),
+                "is_audio": audio_only
             })
 
             print(f"[✅ COMPLETED] {output_filename}")
@@ -252,7 +254,8 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
                 "status": "error",
                 "progress": 0,
                 "speed": "0KB/s",
-                "error": str(e)
+                "error": str(e),
+                "file_type": file_type
             })
 
         finally:
@@ -262,7 +265,7 @@ def _start_download(url, format_id, output_filename, label, audio_only=False, he
     threading.Thread(target=run, daemon=True).start()
     return download_id
 
-# === PROGRESS TRACKING ===
+# === PROGRESS HOOK ===
 
 def _progress_hook(d, download_id):
     if d.get("status") != "downloading":

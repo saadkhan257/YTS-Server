@@ -7,61 +7,79 @@ from flask_cors import CORS
 from utils.downloader import get_video_info, start_download, cancel_download
 from utils.status_manager import get_status
 from utils.history_manager import load_history
-from utils.cleanup import cleanup_old_videos
+from utils.cleanup import cleanup_old_files, cleanup_old_videos
 
 # ✅ Initialize Flask App
 app = Flask(__name__)
-CORS(app)  # Enable CORS for Flutter frontend
-app.secret_key = 'supersecretkeychangeit'  # 🔐 Session secret key
+CORS(app)
+app.secret_key = 'supersecretkeychangeit'
 
-# ✅ Directory setup
+# ✅ Directory Setup
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VIDEO_DIR = os.path.join(BASE_DIR, "static", "videos")
+AUDIO_DIR = os.path.join(BASE_DIR, "static", "audios")
 os.makedirs(VIDEO_DIR, exist_ok=True)
+os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# ✅ Background cleanup thread
+# ✅ Background Cleanup Task
 def start_background_tasks():
-    threading.Thread(target=cleanup_old_videos, daemon=True).start()
+    threading.Thread(target=cleanup_old_files, daemon=True).start()
+
 
 start_background_tasks()
 
-# ✅ Credentials (can be moved to env/config)
+# ✅ Credentials
 VALID_USERNAME = "forest_dev"
 VALID_PASSWORD = "yts$4dm1n"
 
-# ✅ Home route
+# ✅ Home Route (Web Console)
 @app.route('/')
 def home():
     return send_from_directory("web/templates", "index.html")
 
-# ✅ Serve downloaded videos
+# ✅ Serve Downloaded Videos
 @app.route('/videos/<path:filename>')
 def serve_video(filename):
+    return serve_media_file(VIDEO_DIR, filename)
+
+# ✅ Serve Downloaded Audios
+@app.route('/audios/<path:filename>')
+def serve_audio(filename):
+    return serve_media_file(AUDIO_DIR, filename)
+
+# ✅ Shared Serve Logic
+def serve_media_file(directory, filename):
     try:
-        file_path = os.path.join(VIDEO_DIR, filename)
+        file_path = os.path.join(directory, filename)
         if not os.path.isfile(file_path):
             return jsonify({'error': 'File not found'}), 404
 
         ext = os.path.splitext(filename)[1].lower()
         mime_type = {
+            # Video
+            '.mp4': 'video/mp4',
             '.webm': 'video/webm',
             '.mkv': 'video/x-matroska',
-            '.mov': 'video/quicktime'
-        }.get(ext, 'video/mp4')
+            '.mov': 'video/quicktime',
+            # Audio
+            '.mp3': 'audio/mpeg',
+            '.m4a': 'audio/mp4',
+            '.aac': 'audio/aac',
+            '.ogg': 'audio/ogg',
+            '.wav': 'audio/wav'
+        }.get(ext, 'application/octet-stream')
 
-        response = make_response(send_from_directory(VIDEO_DIR, filename, mimetype=mime_type))
+        response = make_response(send_from_directory(directory, filename, mimetype=mime_type))
         response.headers.update({
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Content-Type': mime_type,
-            'Content-Disposition': f'attachment; filename="{filename}"'
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': mime_type
         })
         return response
     except Exception as e:
-        return jsonify({'error': f'Failed to serve video: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to serve file: {str(e)}'}), 500
 
-# ✅ Metadata extraction (normal)
+# ✅ Fetch Video Info (URL)
 @app.route('/fetch_info', methods=['POST'])
 def fetch_info():
     try:
@@ -76,7 +94,7 @@ def fetch_info():
     except Exception as e:
         return jsonify({'error': f'Exception during fetch: {str(e)}'}), 500
 
-# ✅ In-App Browser (WebView) extraction (NOW DEFAULTED TO COOKIE FILE ONLY)
+# ✅ In-App Browser Extraction (WebView)
 @app.route('/extract', methods=['POST'])
 def extract_from_webview():
     try:
@@ -90,24 +108,26 @@ def extract_from_webview():
     except Exception as e:
         return jsonify({'error': f'Failed to extract info: {str(e)}'}), 500
 
-# ✅ Start download
+# ✅ Start Download
 @app.route('/download', methods=['POST'])
 def download():
     try:
         data = request.get_json(force=True)
         url = data.get('url', '').strip()
         quality = data.get('quality', '').strip()
+        type_ = data.get('type', 'video').strip().lower()  # 'audio' or 'video'
+
         if not url or not quality:
             return jsonify({'error': 'Missing URL or quality'}), 400
 
-        print(f"[DOWNLOAD] Starting for: {url}")
+        print(f"[DOWNLOAD] Starting for: {url} [{type_}]")
 
-        download_id = start_download(url, quality)
+        download_id = start_download(url, quality, type_)
         return jsonify({'download_id': download_id, 'status': 'started'})
     except Exception as e:
         return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
 
-# ✅ Cancel download
+# ✅ Cancel Download
 @app.route('/cancel/<download_id>', methods=['POST'])
 def cancel(download_id):
     try:
@@ -118,7 +138,7 @@ def cancel(download_id):
     except Exception as e:
         return jsonify({'error': f'Failed to cancel: {str(e)}'}), 500
 
-# ✅ Check download status
+# ✅ Check Download Status
 @app.route('/status/<download_id>')
 def status(download_id):
     try:
@@ -129,7 +149,7 @@ def status(download_id):
     except Exception as e:
         return jsonify({'error': f'Status check failed: {str(e)}'}), 500
 
-# ✅ View download history
+# ✅ Download History
 @app.route('/history')
 def history():
     try:
@@ -137,7 +157,7 @@ def history():
     except Exception as e:
         return jsonify({'error': f'Failed to load history: {str(e)}'}), 500
 
-# ✅ Developer login (hidden credentials)
+# ✅ Developer Login (Admin UI)
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -149,7 +169,7 @@ def login():
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
-# ✅ Built-in terminal for developers
+# ✅ Built-in Terminal
 @app.route('/api/exec', methods=['POST'])
 def exec_code():
     if not session.get('authenticated'):
@@ -164,13 +184,13 @@ def exec_code():
     except Exception as e:
         return jsonify({'error': str(e)})
 
-# ✅ Block unwanted routes
+# ✅ Dummy Routes (block bots)
 @app.route('/favicon.ico')
 @app.route('/ads.txt')
 @app.route('/robots.txt')
 def dummy_block():
     return '', 204
 
-# ✅ Run app in debug (optional)
+# ✅ Run the App (Local Dev)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

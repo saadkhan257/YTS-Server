@@ -55,8 +55,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
 
     try:
         cookie_file = (
-            write_temp_cookie_file(headers['Cookie'])
-            if headers and 'Cookie' in headers
+            write_temp_cookie_file(headers['Cookie']) if headers and 'Cookie' in headers
             else get_cookie_file_for_platform(platform)
         )
 
@@ -154,24 +153,25 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         traceback.print_exc()
         return {"error": "❌ Unable to fetch video information."}
 
-    finally:
-        if temp_cookie_path and os.path.exists(temp_cookie_path):
-            os.remove(temp_cookie_path)
-
 # === PUBLIC DOWNLOAD ENTRYPOINT ===
 
-def download_youtube(url: str, format_id: str, is_audio=False, label="", headers: dict = None) -> str:
+def download_youtube(url: str, format_id: str = None, is_audio=False, label="", headers: dict = None) -> str:
+    if not url:
+        raise Exception("❌ Missing URL for download")
+
+    if not format_id and not is_audio:
+        raise Exception("❌ Missing format ID for video download")
+
     filename = generate_filename()
     extension = 'mp3' if is_audio else 'mp4'
-    selected_format = format_id or ('bestaudio' if is_audio else 'best')
     outdir = AUDIO_DIR if is_audio else VIDEO_DIR
     outurl = f"{SERVER_URL}/audios/{filename}.{extension}" if is_audio else f"{SERVER_URL}/videos/{filename}.{extension}"
 
     return _start_download(
         url=url,
-        format_id=selected_format,
+        format_id=format_id or ('bestaudio' if is_audio else 'best'),
         output_filename=f"{filename}.{extension}",
-        label=label,
+        label=label or format_id,
         audio_only=is_audio,
         headers=headers,
         output_dir=outdir,
@@ -262,10 +262,6 @@ def _start_download(url, format_id, output_filename, label, audio_only, headers,
                 "error": str(e),
                 "file_type": file_type
             })
-
-        finally:
-            if temp_cookie_path and os.path.exists(temp_cookie_path):
-                os.remove(temp_cookie_path)
 
     threading.Thread(target=run, daemon=True).start()
     return download_id

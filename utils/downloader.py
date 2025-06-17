@@ -49,7 +49,7 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            format_selector = f"bestaudio[abr={audio_quality}]/bestaudio/best"
+            format_selector = f"bestaudio[abr~={audio_quality}]/bestaudio/best"
 
             ydl_opts = {
                 'format': format_selector,

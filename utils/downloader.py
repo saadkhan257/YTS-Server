@@ -21,21 +21,17 @@ from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from services.tiktok_service import extract_info_with_selenium
 
-# --- Directories ---
 AUDIO_DIR = 'static/audios'
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# --- Globals ---
 GLOBAL_PROXY = os.getenv("YTS_PROXY") or None
 _download_threads = {}
 _download_locks = {}
 
-# --- Constants ---
 TEMP_COOKIE_SUFFIX = "_cookie.txt"
 MP4_EXTENSIONS = {"mp4", "m4v", "mov"}
 SUPPORTED_AUDIO_FORMATS = {"m4a", "mp3", "aac", "opus"}
 
-# --- Utility ---
 def generate_filename(prefix="YTSx"):
     return f"{prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
 
@@ -55,7 +51,6 @@ def _prepare_cookie_file(headers, platform):
     print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
     return None
 
-# --- Audio Download ---
 def start_audio_download(url, headers=None, audio_quality='192'):
     download_id = str(uuid.uuid4())
     filename = generate_filename(prefix="audio")
@@ -66,10 +61,8 @@ def start_audio_download(url, headers=None, audio_quality='192'):
 
     def run():
         update_status(download_id, {
-            "status": "starting",
-            "progress": 0,
-            "speed": "0KB/s",
-            "audio_url": None
+            "status": "starting", "progress": 0,
+            "speed": "0KB/s", "audio_url": None
         })
 
         temp_cookie = None
@@ -103,7 +96,7 @@ def start_audio_download(url, headers=None, audio_quality='192'):
 
             start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print(f"[AUDIO DL] Downloading audio from {url}")
+                print(f"[AUDIO DL] Downloading from {url}")
                 ydl.download([url])
             elapsed = time.time() - start_time
 
@@ -112,7 +105,7 @@ def start_audio_download(url, headers=None, audio_quality='192'):
                 return
 
             if not os.path.exists(output_path):
-                raise FileNotFoundError("Audio file not found after download.")
+                raise FileNotFoundError("Downloaded audio file missing.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -129,7 +122,7 @@ def start_audio_download(url, headers=None, audio_quality='192'):
                 "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
             })
 
-            print(f"[AUDIO DL ✅] Done in {round(elapsed, 2)}s")
+            print(f"[AUDIO DL ✅] Completed in {round(elapsed, 2)}s")
 
         except Exception as e:
             print(f"[AUDIO ERROR] {e}")
@@ -144,18 +137,13 @@ def start_audio_download(url, headers=None, audio_quality='192'):
     thread.start()
     return download_id
 
-# --- Metadata Extraction ---
 def extract_metadata(url, headers=None, download_id=None):
-    if not download_id:
-        download_id = str(uuid.uuid4())
-
+    download_id = download_id or str(uuid.uuid4())
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
 
     update_status(download_id, {
-        "status": "extracting",
-        "progress": 0,
-        "speed": "0KB/s"
+        "status": "extracting", "progress": 0, "speed": "0KB/s"
     })
 
     platform = detect_platform(url)
@@ -185,7 +173,7 @@ def extract_metadata(url, headers=None, download_id=None):
         if platform == "tiktok":
             try:
                 info = extract_info_with_selenium(url, headers=headers)
-                print(f"[SELENIUM ✅] Extracted metadata")
+                print(f"[SELENIUM ✅] Fallback extract success")
             except Exception as se:
                 update_status(download_id, {"status": "error", "error": str(se)})
                 return {"error": str(se), "download_id": download_id}
@@ -221,10 +209,7 @@ def extract_metadata(url, headers=None, download_id=None):
                 lang = lang_code.lower()
                 if lang not in seen_dubs:
                     seen_dubs.add(lang)
-                    dubs.append({
-                        "lang": lang,
-                        "label": lang.upper()
-                    })
+                    dubs.append({"lang": lang, "label": lang.upper()})
 
             if height and vcodec != "none" and ext in MP4_EXTENSIONS:
                 label = f"{height}p"
@@ -256,7 +241,6 @@ def extract_metadata(url, headers=None, download_id=None):
         update_status(download_id, {"status": "error", "error": "❌ Failed to parse formats."})
         return {"error": "❌ Failed to parse formats.", "download_id": download_id}
 
-# --- Video Download ---
 def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
     download_id = str(uuid.uuid4())
     filename = generate_filename()
@@ -267,10 +251,8 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
     def run():
         update_status(download_id, {
-            "status": "starting",
-            "progress": 0,
-            "speed": "0KB/s",
-            "video_url": None
+            "status": "starting", "progress": 0,
+            "speed": "0KB/s", "video_url": None
         })
 
         try:
@@ -320,7 +302,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 time.sleep(0.5)
 
             if not os.path.exists(output_path):
-                raise FileNotFoundError("Video file not found after download.")
+                raise FileNotFoundError("Video file missing after download.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -357,7 +339,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     thread.start()
     return download_id
 
-# --- Progress + Control ---
 def _progress_hook(d, download_id, cancel_event):
     if cancel_event.is_set():
         raise Exception("Cancelled by user")

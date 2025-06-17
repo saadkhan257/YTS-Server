@@ -1,5 +1,3 @@
-# 📁 utils/status_manager.py
-
 import os
 from threading import Lock
 from time import time
@@ -9,7 +7,7 @@ _timestamp_map = {}
 _lock = Lock()
 
 DEFAULT_STATUS = {
-    "status": "pending",            # pending / downloading / completed / error / canceled
+    "status": "pending",            # pending / downloading / converting / converted / completed / error / canceled
     "progress": 0.0,                # percent as float
     "speed": "0KB/s",               # human-readable
     "eta": None,                    # estimated time remaining
@@ -17,7 +15,7 @@ DEFAULT_STATUS = {
     "total": 0,                     # bytes
     "video_url": None,
     "platform": None,
-    "phase": None,                  # metadata / download / merge
+    "phase": None,                  # metadata / download / merge / convert
     "message": None,                # optional message
     "error": None,
     "timestamp": 0,                 # last update
@@ -47,8 +45,7 @@ def update_status(download_id: str, data: dict):
         _status_map[download_id]["timestamp"] = now
         _timestamp_map[download_id] = now
 
-        # Auto-fill completed timestamp if marked
-        if data.get("status") == "completed":
+        if data.get("status") in {"completed", "converted", "error", "canceled"}:
             _status_map[download_id]["completed_at"] = now
 
 

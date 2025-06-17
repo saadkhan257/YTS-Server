@@ -336,6 +336,29 @@ def extract_metadata(url, headers=None, download_id=None):
 # --- Video Download ---
 
 def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
+    def parse_bandwidth_limit(limit):
+        if not limit:
+            return None
+        if isinstance(limit, (int, float)):
+            return limit * 1024  # KB to Bytes
+        if isinstance(limit, str):
+            limit = limit.strip().upper()
+            multiplier = 1
+            if limit.endswith("K"):
+                multiplier = 1024
+                limit = limit[:-1]
+            elif limit.endswith("M"):
+                multiplier = 1024 * 1024
+                limit = limit[:-1]
+            elif limit.endswith("G"):
+                multiplier = 1024 * 1024 * 1024
+                limit = limit[:-1]
+            try:
+                return float(limit) * multiplier
+            except:
+                return None
+        return None
+
     download_id = str(uuid.uuid4())
     filename = generate_filename()
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
@@ -377,8 +400,11 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-            if bandwidth_limit:
-                ydl_opts['ratelimit'] = bandwidth_limit * 1024
+
+            parsed_limit = parse_bandwidth_limit(bandwidth_limit)
+            if parsed_limit:
+                ydl_opts['ratelimit'] = parsed_limit
+
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
@@ -436,6 +462,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     _download_threads[download_id] = thread
     thread.start()
     return download_id
+
 
 # --- Progress Hook & Controls ---
 

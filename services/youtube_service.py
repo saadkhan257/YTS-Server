@@ -12,6 +12,7 @@ from utils.platform_helper import detect_platform, get_cookie_file_for_platform,
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
+# === Global Config ===
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
 LANGUAGE_MAP = {
@@ -21,10 +22,12 @@ LANGUAGE_MAP = {
     "vi": "Vietnamese", "zh": "Chinese", "fa": "Persian", "bn": "Bengali"
 }
 
-def generate_filename():
+# === Utils ===
+
+def generate_filename() -> str:
     return f"YTSx_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
 
-def human_readable_size(size_bytes):
+def human_readable_size(size_bytes: int) -> str:
     if not size_bytes:
         return "Unknown"
     for unit in ['B', 'KB', 'MB', 'GB']:
@@ -33,16 +36,16 @@ def human_readable_size(size_bytes):
         size_bytes /= 1024
     return f"{size_bytes:.1f} TB"
 
-def write_temp_cookie_file(cookie_str):
+def write_temp_cookie_file(cookie_str: str) -> str:
     temp = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
     temp.write(cookie_str.strip())
     temp.close()
     return temp.name
 
-def map_language_code(code):
+def map_language_code(code: str) -> str:
     return LANGUAGE_MAP.get(code.lower(), code.upper())
 
-# === METADATA ===
+# === METADATA EXTRACTION ===
 
 def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
@@ -56,12 +59,10 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         ydl_opts = {
             'quiet': True,
             'noplaylist': True,
-            'ignoreerrors': True,
             'cookiefile': cookie_file,
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'http_headers': merged_headers,
             'forcejson': True,
-            'extract_flat': False,
             'dump_single_json': True
         }
 
@@ -74,9 +75,9 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         if not info:
             raise Exception("yt-dlp returned empty info")
 
+        duration = info.get("duration", 0)
         resolutions, audios, dubs = [], [], []
         seen_res, seen_aud, seen_dub_codes = set(), set(), set()
-        duration = info.get("duration", 0)
 
         for f in info.get("formats", []):
             ext = f.get("ext")
@@ -89,6 +90,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
             lang_code = f.get("language") or f.get("language_code")
             size_bytes = f.get("filesize") or f.get("filesize_approx")
 
+            # Estimate if missing
             if not size_bytes and tbr and duration:
                 try:
                     size_bytes = int(tbr * 1024 * duration / 8)
@@ -119,7 +121,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "format_id": format_id
                     })
 
-            # 🌐 Audio Dubs
+            # 🌐 Dubs
             if acodec != "none" and vcodec == "none" and lang_code:
                 lang = lang_code.lower()
                 if lang not in seen_dub_codes:
@@ -152,7 +154,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         if temp_cookie_path and os.path.exists(temp_cookie_path):
             os.remove(temp_cookie_path)
 
-# === PUBLIC DOWNLOAD DISPATCHER ===
+# === PUBLIC DOWNLOAD HANDLER ===
 
 def download_youtube(url: str, format_id: str, is_audio=False, label="", headers: dict = None) -> str:
     filename = generate_filename()
@@ -173,7 +175,7 @@ def download_youtube(url: str, format_id: str, is_audio=False, label="", headers
         file_type='audio' if is_audio else 'video'
     )
 
-# === INTERNAL THREAD WORKER ===
+# === DOWNLOAD THREAD WORKER ===
 
 def _start_download(url, format_id, output_filename, label, audio_only, headers, output_dir, file_url, file_type) -> str:
     download_id = str(uuid.uuid4())
@@ -205,7 +207,8 @@ def _start_download(url, format_id, output_filename, label, audio_only, headers,
                 'noplaylist': True,
                 'cookiefile': cookie_file,
                 'http_headers': merged_headers,
-                'progress_hooks': [lambda d: _progress_hook(d, download_id)]
+                'progress_hooks': [lambda d: _progress_hook(d, download_id)],
+                'merge_output_format': 'mp3' if audio_only else 'mp4'
             }
 
             if audio_only:
@@ -214,9 +217,6 @@ def _start_download(url, format_id, output_filename, label, audio_only, headers,
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }]
-                ydl_opts['merge_output_format'] = 'mp3'
-            else:
-                ydl_opts['merge_output_format'] = 'mp4'
 
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY

@@ -8,7 +8,11 @@ import traceback
 import tempfile
 
 from config import VIDEO_DIR, AUDIO_DIR, SERVER_URL
-from utils.platform_helper import detect_platform, get_cookie_file_for_platform, merge_headers_with_cookie
+from utils.platform_helper import (
+    detect_platform,
+    merge_headers_with_cookie,
+    get_cookie_file_for_platform
+)
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 
@@ -42,7 +46,7 @@ def write_temp_cookie_file(cookie_str):
 def map_language_code(code):
     return LANGUAGE_MAP.get(code.lower(), code.upper())
 
-# === METADATA ===
+# === METADATA EXTRACTOR ===
 
 def get_video_info(url: str, headers: dict = None) -> dict:
     platform = detect_platform(url)
@@ -50,18 +54,20 @@ def get_video_info(url: str, headers: dict = None) -> dict:
     temp_cookie_path = None
 
     try:
-        cookie_file = (write_temp_cookie_file(headers['Cookie']) if headers and 'Cookie' in headers
-                       else get_cookie_file_for_platform(platform))
+        cookie_file = (
+            write_temp_cookie_file(headers['Cookie'])
+            if headers and 'Cookie' in headers
+            else get_cookie_file_for_platform(platform)
+        )
 
         ydl_opts = {
             'quiet': True,
             'noplaylist': True,
             'ignoreerrors': True,
             'cookiefile': cookie_file,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'http_headers': merged_headers,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
             'forcejson': True,
-            'extract_flat': False,
             'dump_single_json': True
         }
 
@@ -97,7 +103,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
 
             size_str = human_readable_size(size_bytes)
 
-            # 🎥 Video
+            # 🎥 Video formats
             if height and vcodec != "none" and ext == "mp4":
                 label = f"{height}p"
                 if label not in seen_res:
@@ -109,7 +115,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "height": height
                     })
 
-            # 🎧 Audio
+            # 🎧 Audio formats
             if acodec != "none" and vcodec == "none" and ext in ("m4a", "webm"):
                 if abr and abr not in seen_aud:
                     seen_aud.add(abr)
@@ -119,7 +125,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
                         "format_id": format_id
                     })
 
-            # 🌐 Audio Dubs
+            # 🌐 Dubs
             if acodec != "none" and vcodec == "none" and lang_code:
                 lang = lang_code.lower()
                 if lang not in seen_dub_codes:
@@ -152,7 +158,7 @@ def get_video_info(url: str, headers: dict = None) -> dict:
         if temp_cookie_path and os.path.exists(temp_cookie_path):
             os.remove(temp_cookie_path)
 
-# === PUBLIC DOWNLOAD DISPATCHER ===
+# === PUBLIC DOWNLOAD ENTRYPOINT ===
 
 def download_youtube(url: str, format_id: str, is_audio=False, label="", headers: dict = None) -> str:
     filename = generate_filename()
@@ -173,20 +179,19 @@ def download_youtube(url: str, format_id: str, is_audio=False, label="", headers
         file_type='audio' if is_audio else 'video'
     )
 
-# === INTERNAL THREAD WORKER ===
+# === WORKER THREAD ===
 
-def _start_download(url, format_id, output_filename, label, audio_only, headers, output_dir, file_url, file_type) -> str:
+def _start_download(url, format_id, output_filename, label, audio_only, headers, output_dir, file_url, file_type):
     download_id = str(uuid.uuid4())
     output_path = os.path.join(output_dir, output_filename)
     platform = detect_platform(url)
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
     temp_cookie_path = None
 
-    if headers and 'Cookie' in headers:
-        temp_cookie_path = write_temp_cookie_file(headers['Cookie'])
-        cookie_file = temp_cookie_path
-    else:
-        cookie_file = get_cookie_file_for_platform(platform)
+    cookie_file = (
+        write_temp_cookie_file(headers['Cookie']) if headers and 'Cookie' in headers
+        else get_cookie_file_for_platform(platform)
+    )
 
     def run():
         update_status(download_id, {
@@ -208,6 +213,9 @@ def _start_download(url, format_id, output_filename, label, audio_only, headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id)]
             }
 
+            if GLOBAL_PROXY:
+                ydl_opts['proxy'] = GLOBAL_PROXY
+
             if audio_only:
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegExtractAudio',
@@ -218,15 +226,12 @@ def _start_download(url, format_id, output_filename, label, audio_only, headers,
             else:
                 ydl_opts['merge_output_format'] = 'mp4'
 
-            if GLOBAL_PROXY:
-                ydl_opts['proxy'] = GLOBAL_PROXY
-
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 print(f"[⏬ START] {output_filename} (format: {format_id})")
                 info = ydl.extract_info(url, download=True)
 
             if not os.path.exists(output_path):
-                raise FileNotFoundError("❌ Final file missing after download.")
+                raise FileNotFoundError("❌ File not found after download.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -265,16 +270,16 @@ def _start_download(url, format_id, output_filename, label, audio_only, headers,
     threading.Thread(target=run, daemon=True).start()
     return download_id
 
-# === PROGRESS HOOK ===
+# === PROGRESS TRACKER ===
 
 def _progress_hook(d, download_id):
     if d.get("status") != "downloading":
         return
 
-    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1
-    downloaded = d.get('downloaded_bytes', 0)
+    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
+    downloaded = d.get("downloaded_bytes", 0)
     percent = int((downloaded / total) * 100)
-    speed = d.get('speed', 0)
+    speed = d.get("speed", 0)
     speed_str = f"{round(speed / 1024, 1)}KB/s" if speed else "0KB/s"
 
     update_status(download_id, {

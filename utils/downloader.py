@@ -300,6 +300,29 @@ def extract_metadata(url, headers=None, download_id=None):
 # --- Video Download ---
 
 def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
+    def parse_bandwidth_limit(limit):
+        if not limit:
+            return None
+        if isinstance(limit, (int, float)):
+            return limit * 1024  # KB to Bytes
+        if isinstance(limit, str):
+            limit = limit.strip().upper()
+            multiplier = 1
+            if limit.endswith("K"):
+                multiplier = 1024
+                limit = limit[:-1]
+            elif limit.endswith("M"):
+                multiplier = 1024 * 1024
+                limit = limit[:-1]
+            elif limit.endswith("G"):
+                multiplier = 1024 * 1024 * 1024
+                limit = limit[:-1]
+            try:
+                return float(limit) * multiplier
+            except:
+                return None
+        return None
+
     download_id = str(uuid.uuid4())
     filename = generate_filename()
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
@@ -341,8 +364,11 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-            if bandwidth_limit:
-                ydl_opts['ratelimit'] = bandwidth_limit * 1024
+
+            parsed_limit = parse_bandwidth_limit(bandwidth_limit)
+            if parsed_limit:
+                ydl_opts['ratelimit'] = parsed_limit
+
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
@@ -401,6 +427,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     thread.start()
     return download_id
 
+
 # --- Progress Hook & Controls ---
 
 def _progress_hook(d, download_id, cancel_event):
@@ -429,6 +456,31 @@ def cancel_download(download_id):
         update_status(download_id, {"status": "cancelled"})
         return True
     return False
+
+def parse_rate_limit(rate_str):
+    """
+    Convert rate limit string like '1M', '500K', '2.5M' into float (bytes/sec)
+    """
+    if not rate_str:
+        return None
+
+    rate_str = rate_str.strip().upper()
+    multiplier = 1
+    if rate_str.endswith('K'):
+        multiplier = 1024
+        rate_str = rate_str[:-1]
+    elif rate_str.endswith('M'):
+        multiplier = 1024 * 1024
+        rate_str = rate_str[:-1]
+    elif rate_str.endswith('G'):
+        multiplier = 1024 * 1024 * 1024
+        rate_str = rate_str[:-1]
+
+    try:
+        return float(rate_str) * multiplier
+    except ValueError:
+        return None  # fallback or raise error if preferred
+
 
 def pause_download(download_id):
     return False

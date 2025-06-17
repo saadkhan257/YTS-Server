@@ -20,7 +20,6 @@ from utils.platform_helper import (
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from services.tiktok_service import extract_info_with_selenium
-from utils.vid_to_mp3_converter import convert_video_to_mp3
 
 
 # --- [ABOVE THIS LINE IS ALL YOUR ORIGINAL IMPORTS & CONSTANTS] ---
@@ -300,8 +299,7 @@ def extract_metadata(url, headers=None, download_id=None):
 
 # --- Video Download ---
 
-def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None, as_mp3=False):
-
+def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
     download_id = str(uuid.uuid4())
     filename = generate_filename()
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
@@ -323,7 +321,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             cookie_file = _prepare_cookie_file(headers, platform)
 
             base_video = f"bestvideo[ext=mp4][height={height}]"
-            base_audio = "bestaudio[ext=m4a]"
+            base_audio = f"bestaudio[ext=m4a]"
             if audio_lang:
                 base_audio += f"[language^{audio_lang}]"
 
@@ -343,19 +341,15 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
-
             if bandwidth_limit:
-                ydl_opts['ratelimit'] = bandwidth_limit * 1024  # KBps to Bytes/sec
-
+                ydl_opts['ratelimit'] = bandwidth_limit * 1024
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
-            print(f"[YTDLP] Starting download for {url}")
             start_time = time.time()
-
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                print(f"[YTDLP] Starting download for {url}")
                 ydl.download([url])
-
             elapsed = time.time() - start_time
             print(f"[YTDLP] Download finished in {round(elapsed, 2)}s")
 
@@ -372,40 +366,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             if not os.path.exists(output_path):
                 raise FileNotFoundError("Download succeeded but file not found.")
 
-            # ✅ If user requested MP3 conversion
-            if as_mp3:
-                try:
-                    update_status(download_id, {"status": "converting"})
-                    mp3_path = convert_video_to_mp3(output_path, AUDIO_DIR)
-
-                    update_status(download_id, {
-                        "status": "completed",
-                        "progress": 100,
-                        "speed": "0KB/s",
-                        "audio_url": f"{SERVER_URL}/audios/{os.path.basename(mp3_path)}"
-                    })
-
-                    save_to_history({
-                        "id": download_id,
-                        "title": os.path.basename(mp3_path),
-                        "resolution": "mp3",
-                        "status": "completed",
-                        "size": round(os.path.getsize(mp3_path) / 1024 / 1024, 2)
-                    })
-
-                    try:
-                        os.remove(output_path)
-                    except:
-                        pass
-
-                    return
-                except Exception as e:
-                    print(f"[MP3 CONVERSION ERROR] {e}")
-                    traceback.print_exc()
-                    update_status(download_id, {"status": "error", "error": "❌ MP3 conversion failed."})
-                    return
-
-            # ✅ Else: Return normal video download
             update_status(download_id, {
                 "status": "completed",
                 "progress": 100,

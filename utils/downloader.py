@@ -29,10 +29,33 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 
 # --- Save as Audio (MP3) Download ---
 
-def start_audio_download(url, headers=None, audio_quality='192'):
+def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
+    def parse_bandwidth_limit(limit):
+        if not limit:
+            return None
+        if isinstance(limit, (int, float)):
+            return limit * 1024  # KB to Bytes
+        if isinstance(limit, str):
+            limit = limit.strip().upper()
+            multiplier = 1
+            if limit.endswith("K"):
+                multiplier = 1024
+                limit = limit[:-1]
+            elif limit.endswith("M"):
+                multiplier = 1024 * 1024
+                limit = limit[:-1]
+            elif limit.endswith("G"):
+                multiplier = 1024 * 1024 * 1024
+                limit = limit[:-1]
+            try:
+                return float(limit) * multiplier
+            except:
+                return None
+        return None
+
     download_id = str(uuid.uuid4())
-    filename = generate_filename(prefix="audio")
-    output_path = os.path.join(AUDIO_DIR, f"{filename}.mp3")
+    filename = generate_filename()
+    output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
     platform = detect_platform(url)
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
@@ -42,63 +65,74 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             "status": "starting",
             "progress": 0,
             "speed": "0KB/s",
-            "audio_url": None
+            "video_url": None
         })
 
         try:
+            height = resolution.replace("p", "")
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            # Try to prefer matching abr, else fallback to bestaudio
-            abr_format = f"bestaudio[abr={audio_quality}]"
-            fallback_format = "bestaudio"
-            format_selector = f"{abr_format}/{fallback_format}"
+            base_video = f"bestvideo[ext=mp4][height={height}]"
+            base_audio = f"bestaudio[ext=m4a]"
+            if audio_lang:
+                base_audio += f"[language^{audio_lang}]"
 
             ydl_opts = {
-                'format': format_selector,
+                'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,
-                'merge_output_format': 'mp3',
+                'merge_output_format': 'mp4',
                 'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': audio_quality,
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4'
                 }],
             }
 
             if cookie_file:
                 ydl_opts['cookiefile'] = cookie_file
+
+            parsed_limit = parse_bandwidth_limit(bandwidth_limit)
+            if parsed_limit:
+                ydl_opts['ratelimit'] = parsed_limit
+
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
             start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print(f"[AUDIO DL] 🎵 Downloading audio from {url} (quality: {audio_quality}K)")
-                result = ydl.download([url])
+                print(f"[YTDLP] Starting download for {url}")
+                ydl.download([url])
             elapsed = time.time() - start_time
-            print(f"[AUDIO DL] ✅ Finished in {round(elapsed, 2)}s")
+            print(f"[YTDLP] Download finished in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
                 return
 
-            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                raise FileNotFoundError("Audio download succeeded but file not found or empty.")
+            for i in range(20):
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    break
+                print(f"[WAIT] Waiting for file to finalize... {i}")
+                time.sleep(0.5)
+
+            if not os.path.exists(output_path):
+                raise FileNotFoundError("Download succeeded but file not found.")
 
             update_status(download_id, {
                 "status": "completed",
                 "progress": 100,
                 "speed": "0KB/s",
-                "audio_url": f"{SERVER_URL}/audios/{os.path.basename(output_path)}"
+                "video_url": f"{SERVER_URL}/videos/{os.path.basename(output_path)}"
             })
 
             save_to_history({
                 "id": download_id,
                 "title": os.path.basename(output_path),
-                "resolution": f"{audio_quality}K",
+                "resolution": resolution,
                 "status": "completed",
                 "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
             })
@@ -106,22 +140,24 @@ def start_audio_download(url, headers=None, audio_quality='192'):
         except yt_dlp.utils.DownloadError as e:
             msg = str(e).lower()
             error_msg = (
-                "❌ Format not available for selected quality." if "requested format not available" in msg else
-                "🔐 Login required or session expired." if "sign in" in msg else
-                "❌ Audio download failed."
+                "🔐 Login or CAPTCHA required." if "sign in" in msg or "captcha" in msg else
+                "❌ Unsupported or invalid video link." if "unsupported url" in msg else
+                "❌ Download failed."
             )
-            print(f"[AUDIO DL ❌] {e}")
+            print(f"[YT-DLP ERROR] {e}")
             update_status(download_id, {"status": "error", "error": error_msg})
 
         except Exception as e:
-            print(f"[AUDIO ERROR ❌] {e}")
+            print(f"[UNEXPECTED ERROR] {e}")
             traceback.print_exc()
-            update_status(download_id, {"status": "error", "error": "❌ Audio download failed unexpectedly."})
+            update_status(download_id, {"status": "error", "error": "❌ Unexpected error."})
 
     thread = threading.Thread(target=run, daemon=True)
     _download_threads[download_id] = thread
     thread.start()
     return download_id
+
+
 
 # --- [Rest of your downloader.py remains unchanged below] ---
 
@@ -429,31 +465,6 @@ def cancel_download(download_id):
         update_status(download_id, {"status": "cancelled"})
         return True
     return False
-
-def parse_rate_limit(rate_str):
-    """
-    Convert rate limit string like '1M', '500K', '2.5M' into float (bytes/sec)
-    """
-    if not rate_str:
-        return None
-
-    rate_str = rate_str.strip().upper()
-    multiplier = 1
-    if rate_str.endswith('K'):
-        multiplier = 1024
-        rate_str = rate_str[:-1]
-    elif rate_str.endswith('M'):
-        multiplier = 1024 * 1024
-        rate_str = rate_str[:-1]
-    elif rate_str.endswith('G'):
-        multiplier = 1024 * 1024 * 1024
-        rate_str = rate_str[:-1]
-
-    try:
-        return float(rate_str) * multiplier
-    except ValueError:
-        return None  # fallback or raise error if preferred
-
 
 def pause_download(download_id):
     return False

@@ -1,3 +1,5 @@
+# ✅ Final Beast Mode: downloader.py
+
 import os
 import re
 import threading
@@ -30,10 +32,7 @@ _download_locks = {}
 TEMP_COOKIE_SUFFIX = "_cookie.txt"
 MP4_EXTENSIONS = {"mp4", "m4v", "mov"}
 SUPPORTED_AUDIO_FORMATS = {"m4a", "mp3", "aac", "opus"}
-MAX_RETRIES = 3
 
-
-# --- Utility Functions ---
 
 def generate_filename(prefix="YTSx"):
     return f"{prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
@@ -44,15 +43,13 @@ def _prepare_cookie_file(headers, platform):
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=TEMP_COOKIE_SUFFIX, mode='w')
         temp.write(headers["Cookie"])
         temp.close()
-        print(f"[COOKIES] ✨ Using header-based cookie file: {temp.name}")
+        print(f"[COOKIES] ✨ Using header-based cookie: {temp.name}")
         return temp.name
-
     fallback = get_cookie_file_for_platform(platform)
     if fallback:
-        print(f"[COOKIES] ✅ Using fallback cookie file: {fallback}")
+        print(f"[COOKIES] ✅ Using fallback cookie: {fallback}")
         return fallback
-
-    print(f"[COOKIES] ⚠️ No cookie used for platform: {platform}")
+    print(f"[COOKIES] ⚠️ No cookie used for {platform}")
     return None
 
 
@@ -68,12 +65,8 @@ def start_audio_download(url, headers=None, audio_quality='192'):
 
     def run():
         update_status(download_id, {
-            "status": "starting",
-            "progress": 0,
-            "speed": "0KB/s",
-            "audio_url": None
+            "status": "starting", "progress": 0, "speed": "0KB/s", "audio_url": None
         })
-
         try:
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
@@ -99,19 +92,16 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
-            start_time = time.time()
+            print(f"[AUDIO DL] 🎵 Starting for {url} at {audio_quality}K")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print(f"[AUDIO DL] Starting for {url} at {audio_quality}K")
                 ydl.download([url])
-            elapsed = time.time() - start_time
-            print(f"[AUDIO DL] Completed in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
                 return
 
             if not os.path.exists(output_path):
-                raise FileNotFoundError("Audio file not created after successful download.")
+                raise FileNotFoundError("❌ Audio file not created.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -129,7 +119,7 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             })
 
         except Exception as e:
-            print(f"[AUDIO ERROR] {e}")
+            print(f"[AUDIO ❌] {e}")
             traceback.print_exc()
             update_status(download_id, {"status": "error", "error": "❌ Audio download failed."})
 
@@ -147,15 +137,10 @@ def extract_metadata(url, headers=None, download_id=None):
 
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
-
-    update_status(download_id, {
-        "status": "extracting",
-        "progress": 0,
-        "speed": "0KB/s",
-    })
+    update_status(download_id, {"status": "extracting", "progress": 0, "speed": "0KB/s"})
 
     platform = detect_platform(url)
-    print(f"[EXTRACT] Extracting from {platform.upper()}: {url}")
+    print(f"[EXTRACT] ⛏️ Platform: {platform.upper()} — {url}")
 
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
     cookie_file = _prepare_cookie_file(headers, platform)
@@ -183,7 +168,7 @@ def extract_metadata(url, headers=None, download_id=None):
         if platform == "tiktok":
             try:
                 info = extract_info_with_selenium(url, headers=headers)
-                print(f"[SELENIUM ✅] Extracted TikTok metadata via fallback")
+                print("[SELENIUM ✅] Metadata fallback succeeded")
             except Exception as se:
                 update_status(download_id, {"status": "error", "error": str(se)})
                 return {"error": str(se), "download_id": download_id}
@@ -195,8 +180,7 @@ def extract_metadata(url, headers=None, download_id=None):
         formats = info.get("formats", [])
         duration = info.get("duration", 0)
         resolutions, sizes, seen = [], [], set()
-        dubs = []
-        audios = {}
+        dubs, audios = [], {}
         audio_seen = set()
 
         for f in formats:
@@ -205,7 +189,7 @@ def extract_metadata(url, headers=None, download_id=None):
                 if label in audio_seen:
                     continue
                 audio_seen.add(label)
-                size = f.get("filesize") or f.get("filesize_approx")
+                size = f.get("filesize") or f.get("filesize_approx") or 0
                 if not size and f.get("tbr"):
                     size = (f["tbr"] * 1000 / 8) * duration
                 size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
@@ -232,7 +216,7 @@ def extract_metadata(url, headers=None, download_id=None):
                 if label in seen:
                     continue
                 seen.add(label)
-                size = f.get("filesize") or f.get("filesize_approx")
+                size = f.get("filesize") or f.get("filesize_approx") or 0
                 if not size and f.get("tbr"):
                     size = (f["tbr"] * 1000 / 8) * duration
                 size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
@@ -273,12 +257,8 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
     def run():
         update_status(download_id, {
-            "status": "starting",
-            "progress": 0,
-            "speed": "0KB/s",
-            "video_url": None
+            "status": "starting", "progress": 0, "speed": "0KB/s", "video_url": None
         })
-
         try:
             height = resolution.replace("p", "")
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
@@ -310,19 +290,16 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
-            start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print(f"[YTDLP] Downloading {url}")
+                print(f"[VIDEO DL] ⬇️ {url}")
                 ydl.download([url])
-            elapsed = time.time() - start_time
-            print(f"[YTDLP] Completed in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
                 return
 
             if not os.path.exists(output_path):
-                raise FileNotFoundError("File not created after download.")
+                raise FileNotFoundError("❌ Video file not created.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -360,26 +337,26 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     return download_id
 
 
-# --- Progress & Controls ---
+# --- Progress ---
 
 def _progress_hook(d, download_id, cancel_event):
     if cancel_event.is_set():
         raise Exception("Cancelled by user")
     if d.get("status") != "downloading":
         return
-
     total = d.get("total_bytes") or d.get("total_bytes_estimate") or 1
     downloaded = d.get("downloaded_bytes", 0)
     percent = int((downloaded / total) * 100)
     speed = d.get("speed", 0)
     speed_str = f"{round(speed / 1024, 1)}KB/s" if speed else "0KB/s"
-
     update_status(download_id, {
         "status": "downloading",
         "progress": percent,
         "speed": speed_str
     })
 
+
+# --- Controls ---
 
 def cancel_download(download_id):
     cancel_event = _download_locks.get(download_id)

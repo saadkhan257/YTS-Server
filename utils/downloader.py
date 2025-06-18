@@ -344,27 +344,45 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            base_video = f"bestvideo[ext=mp4][height={height}]"
-            base_audio = f"bestaudio[ext=m4a]"
+            # Desktop user-agent to force DASH manifest access
+            merged_headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9"
+            })
+
+            # 🎯 Exact format logic (video + audio with resolution and language)
+            base_video = f"bestvideo[ext=mp4][vcodec^=avc1][height={height}]"
+            base_audio = f"bestaudio[ext=m4a][acodec^=mp4a]"
             if audio_lang:
-                base_audio += f"[language^{audio_lang}]"
+                base_audio += f"[language={audio_lang.lower()}]"
+
+            fallback_format = f"best[ext=mp4][height={height}]/best"
+            final_format = f"{base_video}+{base_audio}/{fallback_format}"
 
             ydl_opts = {
-                'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",
+                'format': final_format,
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,
                 'merge_output_format': 'mp4',
                 'http_headers': merged_headers,
+                'cookiefile': cookie_file,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4'
                 }],
+                'player_client': 'web',
+                'allow_unplayable_formats': False,
+                'concurrent_fragment_downloads': 4,
+                'retries': 3,
+                'extractor_args': {
+                    'youtube': ['player_client=web', 'disable_polymer=True', 'no_check_certificate=True']
+                },
+                'force_keyframes_at_cuts': True,
+                'prefer_ffmpeg': True,
+                'verbose': True  # optional: remove this if not debugging
             }
-
-            if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
 
             parsed_limit = parse_bandwidth_limit(bandwidth_limit)
             if parsed_limit:
@@ -373,12 +391,12 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
+            print(f"[🔰 YTDLP START] Format: {final_format}")
             start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print(f"[YTDLP] Starting download for {url}")
                 ydl.download([url])
             elapsed = time.time() - start_time
-            print(f"[YTDLP] Download finished in {round(elapsed, 2)}s")
+            print(f"[✅ YTDLP DONE] Duration: {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
@@ -390,8 +408,8 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 print(f"[WAIT] Waiting for file to finalize... {i}")
                 time.sleep(0.5)
 
-            if not os.path.exists(output_path):
-                raise FileNotFoundError("Download succeeded but file not found.")
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise FileNotFoundError("Download succeeded but file not found or empty.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -410,11 +428,18 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
         except yt_dlp.utils.DownloadError as e:
             msg = str(e).lower()
-            error_msg = (
-                "🔐 Login or CAPTCHA required." if "sign in" in msg or "captcha" in msg else
-                "❌ Unsupported or invalid video link." if "unsupported url" in msg else
-                "❌ Download failed."
-            )
+            if "drm" in msg:
+                error_msg = "🔐 Video is DRM protected."
+            elif "sabr" in msg or "adaptive formats" in msg:
+                error_msg = "⚠️ Video uses adaptive streaming or SABR blocks."
+            elif "sign in" in msg or "captcha" in msg:
+                error_msg = "🔐 Login or CAPTCHA required."
+            elif "unsupported url" in msg:
+                error_msg = "❌ Unsupported or invalid video link."
+            elif "no video formats" in msg:
+                error_msg = "❌ Exact format not available."
+            else:
+                error_msg = "❌ Download failed."
             print(f"[YT-DLP ERROR] {e}")
             update_status(download_id, {"status": "error", "error": error_msg})
 
@@ -427,7 +452,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     _download_threads[download_id] = thread
     thread.start()
     return download_id
-
 
 # --- Progress Hook & Controls ---
 

@@ -5,7 +5,6 @@ import time
 import yt_dlp
 import requests
 import traceback
-import tempfile
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -27,33 +26,22 @@ DEFAULT_HEADERS = {
 def extract_info_with_selenium(url, headers=None):
     print(f"[TT_FALLBACK] Extracting with Selenium: {url}")
 
-    # Create a unique user data dir to avoid Chrome conflicts
-    tmp_dir = tempfile.mkdtemp()
-
     options = Options()
     options.headless = True
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument(f"--user-data-dir={tmp_dir}")
-    options.add_argument("user-agent=" + DEFAULT_HEADERS["User-Agent"])
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/117.0.0.0 Safari/537.36")
 
-    try:
-        driver = webdriver.Chrome(options=options)
-        driver.set_page_load_timeout(30)
-        driver.get(url)
+    driver = webdriver.Chrome(options=options)
+    driver.get(url)
 
-        time.sleep(6)  # Give time for JS to load
+    time.sleep(5)  # Give time for video to load
 
-        video_elements = driver.find_elements("tag name", "video")
-        video_url = video_elements[0].get_attribute("src") if video_elements else None
-    except Exception as e:
-        raise Exception(f"❌ Selenium extract failed: {e}")
-    finally:
-        try:
-            driver.quit()
-        except:
-            pass
+    video_elements = driver.find_elements("tag name", "video")
+    video_url = video_elements[0].get_attribute("src") if video_elements else None
+
+    driver.quit()
 
     if not video_url:
         raise Exception("❌ Failed to extract video URL from TikTok page.")
@@ -89,7 +77,7 @@ def fetch_tiktok_info(url: str, headers=None) -> dict:
         info = extract_with_fallbacks(resolved_url, headers)
         formats = info.get("formats", [])
         resolutions, sizes, seen = [], [], set()
-        duration = int(info.get("duration", 0)) if info.get("duration") else 0
+        duration = int(info.get("duration", 0))
 
         for f in formats:
             if f.get("ext") != "mp4" or not f.get("height"):
@@ -125,7 +113,14 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
 
         formats = info.get("formats", [])
         height = int(resolution.replace("p", ""))
-        selected = next((f for f in formats if f.get("ext") == "mp4" and f.get("height") == height), None)
+        selected = None
+
+        for f in formats:
+            if f.get("ext") != "mp4" or not f.get("height"):
+                continue
+            if f["height"] == height:
+                selected = f
+                break
 
         if not selected and formats:
             selected = formats[0]
@@ -159,7 +154,7 @@ def download_tiktok(url: str, resolution: str, download_id: str, server_url: str
 
         save_to_history({
             "id": download_id,
-            "title": info.get("title", output_file),
+            "title": os.path.basename(output_file),
             "resolution": resolution,
             "status": "completed",
             "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)

@@ -19,10 +19,7 @@ from utils.platform_helper import (
 )
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
-from services.tiktok_service import extract_info_with_selenium, fetch_tiktok_info
-from services.youtube_service import get_video_info as yt_info
-from utils.platform_helper import detect_platform, merge_headers_with_cookie, get_cookie_file_for_platform
-
+from services.tiktok_service import extract_info_with_selenium
 
 
 # --- [ABOVE THIS LINE IS ALL YOUR ORIGINAL IMPORTS & CONSTANTS] ---
@@ -301,6 +298,8 @@ def extract_metadata(url, headers=None, download_id=None):
         return {"error": "❌ Failed to parse formats.", "download_id": download_id}
 
 
+# --- Video Download ---
+
 def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
     def parse_bandwidth_limit(limit):
         if not limit:
@@ -349,15 +348,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             base_audio = f"bestaudio[ext=m4a]"
             if audio_lang:
                 base_audio += f"[language^{audio_lang}]"
-
-            # === ✨ TikTok Special Handling ===
-            if platform == "tiktok":
-                from services.tiktok_service import get_final_tiktok_url
-                try:
-                    url = get_final_tiktok_url(url, headers=headers)
-                except Exception as e:
-                    raise Exception(f"TikTok resolver failed: {e}")
-            # === ✅ End TikTok Section ===
 
             ydl_opts = {
                 'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",
@@ -475,32 +465,4 @@ def resume_download(download_id):
     return False
 
 def get_video_info(url, headers=None, download_id=None):
-    platform = detect_platform(url)
-    merged_headers = merge_headers_with_cookie(headers or {}, platform)
-    cookie_file = _prepare_cookie_file(headers, platform)
-
-    try:
-        # Special TikTok handler
-        if platform == "tiktok":
-            from services.tiktok_service import extract_tiktok_metadata
-            return extract_tiktok_metadata(url, headers=merged_headers)
-
-        ydl_opts = {
-            'quiet': True,
-            'noplaylist': True,
-            'skip_download': True,
-            'extract_flat': False,
-            'http_headers': merged_headers,
-        }
-        if cookie_file:
-            ydl_opts['cookiefile'] = cookie_file
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info
-
-    except Exception as e:
-        print(f"[ERROR] Failed to extract video info: {e}")
-        traceback.print_exc()
-        return {"error": "❌ Failed to extract video information."}
-
+    return extract_metadata(url, headers=headers, download_id=download_id)

@@ -167,7 +167,7 @@ def extract_metadata(url, headers=None, download_id=None):
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
     update_status(download_id, {
-        "status": "extracting", "progress": 0, "speed": "0KB/s"
+        "status": "extracting", "progress": 0, "speed": "0KB/s",
     })
 
     platform = detect_platform(url)
@@ -175,34 +175,34 @@ def extract_metadata(url, headers=None, download_id=None):
     cookie_file = _prepare_cookie_file(headers, platform)
 
     ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "forcejson": True,
-        "noplaylist": True,
-        "extract_flat": False,
-        "no_warnings": True,
-        "http_headers": merged_headers,
-        "progress_hooks": [lambda d: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
-        "extractor_args": {
-            "youtube": ["player_client=web", "disable_polymer=True"]
+        'quiet': True,
+        'skip_download': True,
+        'forcejson': True,
+        'noplaylist': True,
+        'extract_flat': False,
+        'no_warnings': True,
+        'http_headers': merged_headers,
+        'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
+        'extractor_args': {
+            'youtube': ['player_client=web', 'disable_polymer=True']
         }
     }
 
     if cookie_file:
-        ydl_opts["cookiefile"] = cookie_file
+        ydl_opts['cookiefile'] = cookie_file
     if GLOBAL_PROXY:
-        ydl_opts["proxy"] = GLOBAL_PROXY
+        ydl_opts['proxy'] = GLOBAL_PROXY
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            print("✅ [EXTRACTED] yt-dlp successfully fetched metadata")
+            print("[✅ EXTRACTED] Metadata fetched via yt-dlp")
     except Exception as e:
-        print(f"❌ [YTDLP FAILED] {e}")
+        print(f"[❌ YTDLP FAIL] {e}")
         if platform == "tiktok":
             try:
                 info = extract_info_with_selenium(url, headers=headers)
-                print("🔥 [SELENIUM FALLBACK] TikTok metadata extracted!")
+                print("[🔥 SELENIUM RESCUE] TikTok fallback worked!")
             except Exception as se:
                 update_status(download_id, {"status": "error", "error": str(se)})
                 return {"error": str(se), "download_id": download_id}
@@ -213,20 +213,15 @@ def extract_metadata(url, headers=None, download_id=None):
     try:
         formats = info.get("formats", [])
         duration = info.get("duration", 0)
-        title = info.get("title", "Untitled")
-        uploader = info.get("uploader", platform.upper())
+        title = info.get("title")
+        uploader = info.get("uploader")
         thumbnail = info.get("thumbnail")
         is_live = info.get("is_live") or False
 
-        resolutions = {}
-        audios = {}
-        dubs = []
+        resolutions, audios, dubs = {}, {}, []
+        codec_map, seen_video, seen_audio = {}, set(), set()
 
-        seen_video = set()
-        seen_audio = set()
-        codec_map = {}
-
-        # 🎙️ Audio Dubs
+        # --- Audio Dubs ---
         audio_tracks = info.get("audio_tracks") or []
         for track in audio_tracks:
             lang_code = track.get("language_code") or track.get("language") or "und"
@@ -239,7 +234,7 @@ def extract_metadata(url, headers=None, download_id=None):
                     "autoselect": track.get("autoselect", False)
                 })
 
-        # 🧠 Format Parsing
+        # --- Format Classification ---
         for f in formats:
             ext = f.get("ext")
             acodec = f.get("acodec")
@@ -251,13 +246,11 @@ def extract_metadata(url, headers=None, download_id=None):
             abr = f.get("abr")
             tbr = f.get("tbr")
             filesize = f.get("filesize") or f.get("filesize_approx")
-
-            if not filesize and tbr and duration:
+            if not filesize and tbr:
                 filesize = (tbr * 1000 / 8) * duration
-
             size_str = f"{round(filesize / 1024 / 1024, 2)}MB" if filesize else "Unknown"
 
-            # 🎧 Audio-Only Formats
+            # --- Audio Only Formats ---
             if vcodec == "none" and acodec != "none" and abr and ext in SUPPORTED_AUDIO_FORMATS:
                 label = f"{int(abr)}K"
                 if label not in seen_audio:
@@ -271,7 +264,7 @@ def extract_metadata(url, headers=None, download_id=None):
                     }
                     seen_audio.add(label)
 
-            # 📺 Video Formats
+            # --- Video Formats ---
             elif vcodec != "none" and height and ext == "mp4":
                 label = f"{height}p"
                 codec_key = f"{vcodec}_{fps}"
@@ -289,7 +282,7 @@ def extract_metadata(url, headers=None, download_id=None):
                     seen_video.add(label)
                     codec_map[label] = {"vcodec": vcodec, "fps": fps}
 
-        # 🚀 Final Result
+        # --- Prepare Final Response ---
         result = {
             "download_id": download_id,
             "title": title,
@@ -299,18 +292,73 @@ def extract_metadata(url, headers=None, download_id=None):
             "is_live": is_live,
             "resolutions": dict(sorted(resolutions.items(), key=lambda x: int(x[0].replace("p", "")), reverse=True)),
             "audios": dict(sorted(audios.items(), key=lambda x: int(x[0].replace("K", "")), reverse=True)),
-            "dubs": sorted(dubs, key=lambda x: x["label"])
+            "dubs": sorted(dubs, key=lambda x: x["label"]),
         }
 
         update_status(download_id, {"status": "ready", "metadata": result})
         return result
 
     except Exception as e:
-        print(f"❌ [METADATA PARSE ERROR] {e}")
+        print(f"[❌ METADATA PARSE ERROR] {e}")
         traceback.print_exc()
         update_status(download_id, {"status": "error", "error": "Metadata parse failed."})
         return {"error": "Metadata parse failed", "download_id": download_id}
 
+                
+
+        # --- Extract Audio Dubs ---
+        seen_dubs = set()
+        for f in formats:
+            lang_code = f.get("language") or f.get("language_code")
+            acodec = f.get("acodec")
+            vcodec = f.get("vcodec")
+            if lang_code and acodec != "none" and vcodec == "none":
+                lang = lang_code.lower()
+                if lang not in seen_dubs:
+                    seen_dubs.add(lang)
+                    dubs.append({
+                        "lang": lang,
+                        "label": lang.upper()
+                    })
+
+        # --- Extract Video Resolutions ---
+        for f in formats:
+            if not f.get("height") or f.get("vcodec") == "none" or f.get("ext") not in MP4_EXTENSIONS:
+                continue
+
+            label = f"{f['height']}p"
+            if label in seen:
+                continue
+            seen.add(label)
+
+            size = f.get("filesize") or f.get("filesize_approx")
+            if not size and f.get("tbr"):
+                size = (f["tbr"] * 1000 / 8) * duration
+            size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
+
+            resolutions.append(label)
+            sizes.append(size_str)
+
+        update_status(download_id, {"status": "ready"})
+
+        return {
+            "download_id": download_id,
+            "platform": platform,
+            "title": info.get("title", "Untitled"),
+            "thumbnail": info.get("thumbnail"),
+            "uploader": info.get("uploader", platform),
+            "duration": duration,
+            "video_url": url,
+            "resolutions": resolutions,
+            "sizes": sizes,
+            "audio_dubs": dubs,
+            "audioFormats": list(audios.values()),
+        }
+
+    except Exception as e:
+        print(f"[FORMAT PARSE ERROR] {e}")
+        update_status(download_id, {"status": "error", "error": "❌ Failed to parse formats."})
+        return {"error": "❌ Failed to parse formats.", "download_id": download_id}
 
 
 # --- Video Download ---

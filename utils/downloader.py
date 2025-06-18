@@ -166,11 +166,16 @@ def extract_metadata(url, headers=None, download_id=None):
 
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
+
     update_status(download_id, {
-        "status": "extracting", "progress": 0, "speed": "0KB/s",
+        "status": "extracting",
+        "progress": 0,
+        "speed": "0KB/s",
     })
 
     platform = detect_platform(url)
+    print(f"[EXTRACT] Extracting from {platform.upper()}: {url}")
+
     merged_headers = merge_headers_with_cookie(headers or {}, platform)
     cookie_file = _prepare_cookie_file(headers, platform)
 
@@ -180,12 +185,8 @@ def extract_metadata(url, headers=None, download_id=None):
         'forcejson': True,
         'noplaylist': True,
         'extract_flat': False,
-        'no_warnings': True,
         'http_headers': merged_headers,
         'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
-        'extractor_args': {
-            'youtube': ['player_client=web', 'disable_polymer=True']
-        }
     }
 
     if cookie_file:
@@ -196,114 +197,50 @@ def extract_metadata(url, headers=None, download_id=None):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            print("[✅ EXTRACTED] Metadata fetched via yt-dlp")
     except Exception as e:
-        print(f"[❌ YTDLP FAIL] {e}")
+        print(f"[YTDLP ❌] {e}")
+        print(f"[FALLBACK] Trying TikTok extraction with Selenium...")
+
         if platform == "tiktok":
             try:
                 info = extract_info_with_selenium(url, headers=headers)
-                print("[🔥 SELENIUM RESCUE] TikTok fallback worked!")
+                print(f"[SELENIUM ✅] Extracted TikTok metadata via browser!")
             except Exception as se:
+                print(f"[FALLBACK ❌] Selenium also failed: {se}")
                 update_status(download_id, {"status": "error", "error": str(se)})
                 return {"error": str(se), "download_id": download_id}
         else:
             update_status(download_id, {"status": "error", "error": str(e)})
             return {"error": str(e), "download_id": download_id}
-
     try:
         formats = info.get("formats", [])
         duration = info.get("duration", 0)
-        title = info.get("title")
-        uploader = info.get("uploader")
-        thumbnail = info.get("thumbnail")
-        is_live = info.get("is_live") or False
+        resolutions, sizes, seen = [], [], set()
+        dubs = []
+        audios = {}
+        audio_seen = set()
 
-        resolutions, audios, dubs = {}, {}, []
-        codec_map, seen_video, seen_audio = {}, set(), set()
-
-        # --- Audio Dubs ---
-        audio_tracks = info.get("audio_tracks") or []
-        for track in audio_tracks:
-            lang_code = track.get("language_code") or track.get("language") or "und"
-            label = lang_code.upper()
-            if label not in [d["label"] for d in dubs]:
-                dubs.append({
-                    "language": lang_code.lower(),
-                    "label": label,
-                    "name": track.get("name") or label,
-                    "autoselect": track.get("autoselect", False)
-                })
-
-        # --- Format Classification ---
+        # --- Extract Audio Qualities ---
         for f in formats:
-            ext = f.get("ext")
             acodec = f.get("acodec")
             vcodec = f.get("vcodec")
-            format_id = f.get("format_id")
-            height = f.get("height")
-            width = f.get("width")
-            fps = f.get("fps") or 30
-            abr = f.get("abr")
-            tbr = f.get("tbr")
-            filesize = f.get("filesize") or f.get("filesize_approx")
-            if not filesize and tbr:
-                filesize = (tbr * 1000 / 8) * duration
-            size_str = f"{round(filesize / 1024 / 1024, 2)}MB" if filesize else "Unknown"
-
-            # --- Audio Only Formats ---
+            abr = f.get("abr")  # in Kbps
+            ext = f.get("ext")
             if vcodec == "none" and acodec != "none" and abr and ext in SUPPORTED_AUDIO_FORMATS:
                 label = f"{int(abr)}K"
-                if label not in seen_audio:
-                    audios[label] = {
-                        "label": label,
-                        "abr": abr,
-                        "format_id": format_id,
-                        "ext": ext,
-                        "size": size_str,
-                        "acodec": acodec
-                    }
-                    seen_audio.add(label)
-
-            # --- Video Formats ---
-            elif vcodec != "none" and height and ext == "mp4":
-                label = f"{height}p"
-                codec_key = f"{vcodec}_{fps}"
-                if label not in seen_video or codec_map.get(label, {}).get("fps", 0) < fps:
-                    resolutions[label] = {
-                        "label": label,
-                        "format_id": format_id,
-                        "height": height,
-                        "width": width,
-                        "fps": fps,
-                        "size": size_str,
-                        "vcodec": vcodec,
-                        "is_dash": f.get("is_dash", False)
-                    }
-                    seen_video.add(label)
-                    codec_map[label] = {"vcodec": vcodec, "fps": fps}
-
-        # --- Prepare Final Response ---
-        result = {
-            "download_id": download_id,
-            "title": title,
-            "uploader": uploader,
-            "thumbnail": thumbnail,
-            "duration": duration,
-            "is_live": is_live,
-            "resolutions": dict(sorted(resolutions.items(), key=lambda x: int(x[0].replace("p", "")), reverse=True)),
-            "audios": dict(sorted(audios.items(), key=lambda x: int(x[0].replace("K", "")), reverse=True)),
-            "dubs": sorted(dubs, key=lambda x: x["label"]),
-        }
-
-        update_status(download_id, {"status": "ready", "metadata": result})
-        return result
-
-    except Exception as e:
-        print(f"[❌ METADATA PARSE ERROR] {e}")
-        traceback.print_exc()
-        update_status(download_id, {"status": "error", "error": "Metadata parse failed."})
-        return {"error": "Metadata parse failed", "download_id": download_id}
-
+                if label in audio_seen:
+                    continue
+                audio_seen.add(label)
+                size = f.get("filesize") or f.get("filesize_approx")
+                if not size and f.get("tbr"):
+                    size = (f["tbr"] * 1000 / 8) * duration
+                size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
+                audios[label] = {
+                    "label": label,
+                    "abr": abr,
+                    "size": size_str
+                    
+                }
                 
 
         # --- Extract Audio Dubs ---
@@ -407,45 +344,27 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            # Desktop user-agent to force DASH manifest access
-            merged_headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9"
-            })
-
-            # 🎯 Exact format logic (video + audio with resolution and language)
-            base_video = f"bestvideo[ext=mp4][vcodec^=avc1][height={height}]"
-            base_audio = f"bestaudio[ext=m4a][acodec^=mp4a]"
+            base_video = f"bestvideo[ext=mp4][height={height}]"
+            base_audio = f"bestaudio[ext=m4a]"
             if audio_lang:
-                base_audio += f"[language={audio_lang.lower()}]"
-
-            fallback_format = f"best[ext=mp4][height={height}]/best"
-            final_format = f"{base_video}+{base_audio}/{fallback_format}"
+                base_audio += f"[language^{audio_lang}]"
 
             ydl_opts = {
-                'format': final_format,
+                'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,
                 'merge_output_format': 'mp4',
                 'http_headers': merged_headers,
-                'cookiefile': cookie_file,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
                 'postprocessors': [{
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4'
                 }],
-                'player_client': 'web',
-                'allow_unplayable_formats': False,
-                'concurrent_fragment_downloads': 4,
-                'retries': 3,
-                'extractor_args': {
-                    'youtube': ['player_client=web', 'disable_polymer=True', 'no_check_certificate=True']
-                },
-                'force_keyframes_at_cuts': True,
-                'prefer_ffmpeg': True,
-                'verbose': True  # optional: remove this if not debugging
             }
+
+            if cookie_file:
+                ydl_opts['cookiefile'] = cookie_file
 
             parsed_limit = parse_bandwidth_limit(bandwidth_limit)
             if parsed_limit:
@@ -454,12 +373,12 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
-            print(f"[🔰 YTDLP START] Format: {final_format}")
             start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                print(f"[YTDLP] Starting download for {url}")
                 ydl.download([url])
             elapsed = time.time() - start_time
-            print(f"[✅ YTDLP DONE] Duration: {round(elapsed, 2)}s")
+            print(f"[YTDLP] Download finished in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
@@ -471,8 +390,8 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 print(f"[WAIT] Waiting for file to finalize... {i}")
                 time.sleep(0.5)
 
-            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                raise FileNotFoundError("Download succeeded but file not found or empty.")
+            if not os.path.exists(output_path):
+                raise FileNotFoundError("Download succeeded but file not found.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -491,18 +410,11 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
 
         except yt_dlp.utils.DownloadError as e:
             msg = str(e).lower()
-            if "drm" in msg:
-                error_msg = "🔐 Video is DRM protected."
-            elif "sabr" in msg or "adaptive formats" in msg:
-                error_msg = "⚠️ Video uses adaptive streaming or SABR blocks."
-            elif "sign in" in msg or "captcha" in msg:
-                error_msg = "🔐 Login or CAPTCHA required."
-            elif "unsupported url" in msg:
-                error_msg = "❌ Unsupported or invalid video link."
-            elif "no video formats" in msg:
-                error_msg = "❌ Exact format not available."
-            else:
-                error_msg = "❌ Download failed."
+            error_msg = (
+                "🔐 Login or CAPTCHA required." if "sign in" in msg or "captcha" in msg else
+                "❌ Unsupported or invalid video link." if "unsupported url" in msg else
+                "❌ Download failed."
+            )
             print(f"[YT-DLP ERROR] {e}")
             update_status(download_id, {"status": "error", "error": error_msg})
 
@@ -515,6 +427,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     _download_threads[download_id] = thread
     thread.start()
     return download_id
+
 
 # --- Progress Hook & Controls ---
 

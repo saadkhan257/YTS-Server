@@ -365,10 +365,9 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 base_audio += f"[language^{audio_lang}]"
 
             format_string = (
-                f"{base_video}+{base_audio}/"
-                f"bestvideo+bestaudio/"
-                f"best"
-            )
+                f"bestvideo[height={height}]/bestvideo"
+                f"+bestaudio/best"
+                )
 
             print(f"[YTDLP] 🎯 Using format: {format_string}")
 

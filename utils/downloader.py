@@ -54,7 +54,9 @@ def _get_service_function(platform, function_suffix):
 
 def extract_metadata(url, headers=None, download_id=None):
     platform = detect_platform(url)
+    print(f"[DEBUG] Detected platform: {platform}")
     fn = _get_service_function(platform, "extract")
+    print(f"[DEBUG] Using function: {fn.__name__}")
     return fn(url=url, headers=headers, download_id=download_id)
 
 def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):

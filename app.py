@@ -1,8 +1,6 @@
 import os
 import json
 import threading
-import traceback
-import uuid
 from flask import Flask, request, jsonify, send_from_directory, make_response, Response, abort, session
 from flask_cors import CORS
 
@@ -111,27 +109,22 @@ def extract_from_webview():
 
 # ✅ Start Download
 @app.route('/download', methods=['POST'])
-def download_route():
+def download():
     try:
-        data = request.get_json()
-        url = data.get('url')
-        if not url:
-            return jsonify({'error': 'Missing URL'}), 400
+        data = request.get_json(force=True)
+        url = data.get('url', '').strip()
+        quality = data.get('quality', '').strip()
+        type_ = data.get('type', 'video').strip().lower()  # 'audio' or 'video'
 
-        download_id = str(uuid.uuid4())
-        threading.Thread(
-            target=start_download,
-            args=(url, data, download_id),
-            daemon=True
-        ).start()
+        if not url or not quality:
+            return jsonify({'error': 'Missing URL or quality'}), 400
 
-        return jsonify({'download_id': download_id}), 200
+        print(f"[DOWNLOAD] Starting for: {url} [{type_}]")
 
+        download_id = start_download(url, quality, type_)
+        return jsonify({'download_id': download_id, 'status': 'started'})
     except Exception as e:
-        print(f"[ERROR] /download failed: {e}")
-        traceback.print_exc()
-        return jsonify({'error': 'Server failed to start download.'}), 500
-
+        return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
 
 # ✅ Cancel Download
 @app.route('/cancel/<download_id>', methods=['POST'])

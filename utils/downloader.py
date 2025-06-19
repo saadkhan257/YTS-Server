@@ -311,7 +311,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
         if not limit:
             return None
         if isinstance(limit, (int, float)):
-            return limit * 1024  # KB to Bytes
+            return limit * 1024
         if isinstance(limit, str):
             limit = limit.strip().upper()
             multiplier = 1
@@ -346,8 +346,16 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
         })
 
         try:
-            height = resolution.replace("p", "")
+            height = ''.join(filter(str.isdigit, resolution))
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
+
+            # ✨ Force user-agent for YouTube Shorts
+            merged_headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            )
+
             cookie_file = _prepare_cookie_file(headers, platform)
 
             base_video = f"bestvideo[ext=mp4][height={height}]"
@@ -355,8 +363,17 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             if audio_lang:
                 base_audio += f"[language^{audio_lang}]"
 
+            # 🧠 Smart fallback format logic
+            format_string = (
+                f"{base_video}+{base_audio}/"
+                f"bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+                f"best"
+            )
+
+            print(f"[YTDLP] 🎯 Using format: {format_string}")
+
             ydl_opts = {
-                'format': f"{base_video}+{base_audio}/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+                'format': format_string,
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,
@@ -384,7 +401,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 print(f"[YTDLP] Starting download for {url}")
                 ydl.download([url])
             elapsed = time.time() - start_time
-            print(f"[YTDLP] Download finished in {round(elapsed, 2)}s")
+            print(f"[YTDLP] ✅ Download finished in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
@@ -403,7 +420,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 "status": "completed",
                 "progress": 100,
                 "speed": "0KB/s",
-                "video_url": f"{SERVER_URL}/videos/{os.path.basename(output_path)}"
+                "video_url": f"{SERVER_URL}/media/{os.path.basename(output_path)}"
             })
 
             save_to_history({
@@ -418,7 +435,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             msg = str(e).lower()
             error_msg = (
                 "🔐 Login or CAPTCHA required." if "sign in" in msg or "captcha" in msg else
-                "❌ Unsupported or invalid video link." if "unsupported url" in msg else
+                "❌ Invalid video resolution or link." if "unsupported url" in msg else
                 "❌ Download failed."
             )
             print(f"[YT-DLP ERROR] {e}")
@@ -433,6 +450,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     _download_threads[download_id] = thread
     thread.start()
     return download_id
+
 
 
 # --- Progress Hook & Controls ---

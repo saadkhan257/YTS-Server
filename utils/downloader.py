@@ -1,85 +1,136 @@
 import os
 import uuid
 import threading
-import importlib
-import inspect
+import traceback
 
-from config import VIDEO_DIR, AUDIO_DIR
+from config import VIDEO_DIR, AUDIO_DIR, SERVER_URL
 from utils.platform_helper import detect_platform
 from utils.status_manager import update_status
 
-# --- Global Setup ---
-os.makedirs(VIDEO_DIR, exist_ok=True)
-os.makedirs(AUDIO_DIR, exist_ok=True)
+# Direct imports of all platform service files
+from services.yt_service import (
+    extract_yt_metadata,
+    start_yt_audio_download,
+    start_yt_video_download
+)
 
-GLOBAL_PROXY = os.getenv("YTS_PROXY") or None
+from services.tt_service import (
+    extract_tt_metadata,
+    start_tt_audio_download,
+    start_tt_video_download
+)
+
+from services.fb_service import (
+    extract_fb_metadata,
+    start_fb_audio_download,
+    start_fb_video_download
+)
+
+from services.x_service import (
+    extract_x_metadata,
+    start_x_audio_download,
+    start_x_video_download
+)
+
+from services.ig_service import (
+    extract_ig_metadata,
+    start_ig_audio_download,
+    start_ig_video_download
+)
+
+
+# Internal thread + cancel tracking
 _download_threads = {}
 _download_locks = {}
 
-# --- Auto Service Loader ---
-SERVICE_MAP = {}
+# Map platform to proper handlers
+SERVICE_MAP = {
+    "youtube": {
+        "meta": extract_yt_metadata,
+        "audio": start_yt_audio_download,
+        "video": start_yt_video_download
+    },
+    "tiktok": {
+        "meta": extract_tt_metadata,
+        "audio": start_tt_audio_download,
+        "video": start_tt_video_download
+    },
+    "facebook": {
+        "meta": extract_fb_metadata,
+        "audio": start_fb_audio_download,
+        "video": start_fb_video_download
+    },
+    "x": {
+        "meta": extract_x_metadata,
+        "audio": start_x_audio_download,
+        "video": start_x_video_download
+    },
+    "instagram": {
+        "meta": extract_ig_metadata,
+        "audio": start_ig_audio_download,
+        "video": start_ig_video_download
+    },
+}
 
-def _load_all_services():
-    import services
-    for name in dir(services):
-        if name.endswith("_service"):
-            module = getattr(services, name)
-            platform = name.replace("_service", "")
-            if inspect.ismodule(module):
-                SERVICE_MAP[platform] = module
 
-_load_all_services()
+# --- Public API ---
 
-# --- Function Resolver ---
-def _get_service_function(platform, function_suffix):
-    service = SERVICE_MAP.get(platform)
-    if not service:
-        raise Exception(f"❌ Unsupported platform: {platform}")
-
-    fn_name = None
-    if function_suffix == "extract":
-        fn_name = f"extract_{platform}_metadata"
-    elif function_suffix == "start":
-        fn_name = f"start_{platform}_download"
-    elif function_suffix == "start_audio":
-        fn_name = f"start_audio_{platform}_download"
-    else:
-        raise Exception(f"❌ Unknown function suffix: {function_suffix}")
-
-    if not hasattr(service, fn_name):
-        raise Exception(f"❌ `{fn_name}()` not found in {platform}_service.py")
-    return getattr(service, fn_name)
-
-# --- Unified Public APIs ---
-
-def extract_metadata(url, headers=None, download_id=None):
+def get_video_info(url, headers=None, download_id=None):
     platform = detect_platform(url)
-    print(f"[DEBUG] Detected platform: {platform}")
-    fn = _get_service_function(platform, "extract")
-    print(f"[DEBUG] Using function: {fn.__name__}")
-    return fn(url=url, headers=headers, download_id=download_id)
+    service = SERVICE_MAP.get(platform)
+
+    if not service:
+        return {
+            "error": f"❌ Unsupported platform: {platform}",
+            "download_id": download_id or str(uuid.uuid4())
+        }
+
+    try:
+        return service["meta"](url, headers=headers, download_id=download_id)
+    except Exception as e:
+        print(f"[METADATA ERROR] {platform}: {e}")
+        traceback.print_exc()
+        return {
+            "error": f"❌ Failed to extract metadata from {platform}: {str(e)}",
+            "download_id": download_id or str(uuid.uuid4())
+        }
+
+
+def start_audio_download(url, headers=None, audio_quality="192"):
+    platform = detect_platform(url)
+    service = SERVICE_MAP.get(platform)
+
+    if not service or "audio" not in service:
+        return {"error": f"❌ Audio download not supported for {platform}"}
+
+    try:
+        return service["audio"](url, headers=headers, audio_quality=audio_quality)
+    except Exception as e:
+        print(f"[AUDIO ERROR] {platform}: {e}")
+        traceback.print_exc()
+        return {"error": f"❌ Audio download failed on {platform}: {str(e)}"}
+
 
 def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_lang=None):
     platform = detect_platform(url)
-    fn = _get_service_function(platform, "start")
-    return fn(
-        url=url,
-        resolution=resolution,
-        headers=headers,
-        bandwidth_limit=bandwidth_limit,
-        audio_lang=audio_lang
-    )
+    service = SERVICE_MAP.get(platform)
 
-def start_audio_download(url, headers=None, audio_quality='192'):
-    platform = detect_platform(url)
-    fn = _get_service_function(platform, "start_audio")
-    return fn(
-        url=url,
-        headers=headers,
-        audio_quality=audio_quality
-    )
+    if not service or "video" not in service:
+        return {"error": f"❌ Video download not supported for {platform}"}
 
-# --- Download Controls ---
+    try:
+        return service["video"](
+            url,
+            resolution=resolution,
+            headers=headers,
+            audio_lang=audio_lang,
+            bandwidth_limit=bandwidth_limit
+        )
+    except Exception as e:
+        print(f"[VIDEO ERROR] {platform}: {e}")
+        traceback.print_exc()
+        return {"error": f"❌ Video download failed on {platform}: {str(e)}"}
+
 
 def cancel_download(download_id):
     cancel_event = _download_locks.get(download_id)
@@ -89,20 +140,12 @@ def cancel_download(download_id):
         return True
     return False
 
-def pause_download(download_id):
-    # Placeholder for future pause support
-    return False
 
-def resume_download(download_id):
-    # Placeholder for future resume support
-    return False
+# --- Internal Utilities for service modules ---
 
-# --- Convenience Aliases ---
+def register_thread(download_id, thread):
+    _download_threads[download_id] = thread
 
-def get_video_info(url, headers=None, download_id=None):
-    return extract_metadata(url, headers=headers, download_id=download_id)
 
-# --- Shared Thread Map Access ---
-
-def get_download_thread_map():
-    return _download_threads, _download_locks
+def register_cancel_event(download_id, cancel_event):
+    _download_locks[download_id] = cancel_event

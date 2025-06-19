@@ -2,7 +2,6 @@
 
 import os
 import uuid
-import time
 import yt_dlp
 import tempfile
 import threading
@@ -14,20 +13,17 @@ from config import SERVER_URL
 from utils.platform_helper import merge_headers_with_cookie, get_cookie_file_for_platform
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
+from utils.download_registry import register_thread, register_cancel_event
 
-# --- Directory Setup ---
 VIDEO_DIR = 'static/videos'
 AUDIO_DIR = 'static/audios'
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# --- Constants ---
-GLOBAL_PROXY = os.getenv("YTS_PROXY") or None
+GLOBAL_PROXY = os.getenv("YTS_PROXY")
 TEMP_COOKIE_SUFFIX = "_cookie.txt"
-_download_threads = {}
-_download_locks = {}
 
-# --- Utilities ---
+# --- Helpers ---
 
 def generate_filename(prefix="x"):
     return f"{prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
@@ -56,52 +52,65 @@ def _progress_hook(d, download_id, cancel_event):
         "speed": speed_str
     })
 
+def parse_bandwidth_limit(limit):
+    if not limit:
+        return None
+    if isinstance(limit, (int, float)):
+        return limit * 1024
+    if isinstance(limit, str):
+        limit = limit.strip().upper()
+        units = {"K": 1024, "M": 1024**2, "G": 1024**3}
+        for suffix, factor in units.items():
+            if limit.endswith(suffix):
+                return float(limit[:-1]) * factor
+    return None
+
 # --- Metadata Extraction ---
 
 def extract_x_metadata(url, headers=None, download_id=None):
     download_id = download_id or str(uuid.uuid4())
     cancel_event = threading.Event()
-    _download_locks[download_id] = cancel_event
+    register_cancel_event(download_id, cancel_event)
     update_status(download_id, {"status": "extracting", "progress": 0, "speed": "0KB/s"})
 
-    merged_headers = merge_headers_with_cookie(headers or {}, "x")
-    cookie_file = _prepare_cookie_file(headers)
-
-    ydl_opts = {
-        'quiet': True,
-        'skip_download': True,
-        'forcejson': True,
-        'noplaylist': True,
-        'extract_flat': False,
-        'http_headers': merged_headers,
-        'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
-    }
-
-    if cookie_file:
-        ydl_opts['cookiefile'] = cookie_file
-    if GLOBAL_PROXY:
-        ydl_opts['proxy'] = GLOBAL_PROXY
-
     try:
+        merged_headers = merge_headers_with_cookie(headers or {}, "x")
+        cookie_file = _prepare_cookie_file(headers)
+
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'forcejson': True,
+            'noplaylist': True,
+            'extract_flat': False,
+            'http_headers': merged_headers,
+            'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
+        }
+
+        if cookie_file:
+            ydl_opts['cookiefile'] = cookie_file
+        if GLOBAL_PROXY:
+            ydl_opts['proxy'] = GLOBAL_PROXY
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
         formats = info.get("formats", [])
         duration = info.get("duration", 0)
         seen = set()
-        resolutions = []
-        sizes = []
+        resolutions, sizes = [], []
 
         for f in formats:
             height = f.get("height")
-            ext = f.get("ext")
-            if not height or f.get("vcodec") == "none":
+            if not height or f.get("vcodec") == "none" or f.get("ext") != "mp4":
                 continue
             label = f"{height}p"
             if label in seen:
                 continue
             seen.add(label)
             size = f.get("filesize") or f.get("filesize_approx")
+            if not size and f.get("tbr") and duration:
+                size = (f["tbr"] * 1000 / 8) * duration
             size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
             resolutions.append(label)
             sizes.append(size_str)
@@ -119,47 +128,54 @@ def extract_x_metadata(url, headers=None, download_id=None):
             "resolutions": resolutions,
             "sizes": sizes,
             "audio_dubs": [],
-            "audioFormats": [{"label": "Original", "abr": "N/A", "size": sizes[0] if sizes else "Unknown"}]
+            "audioFormats": [{
+                "label": "Original",
+                "abr": "N/A",
+                "size": sizes[0] if sizes else "Unknown"
+            }]
         }
 
     except Exception as e:
-        update_status(download_id, {"status": "error", "error": str(e)})
         traceback.print_exc()
+        update_status(download_id, {"status": "error", "error": f"❌ Metadata error: {e}"})
         return {"error": str(e), "download_id": download_id}
 
 # --- Audio Download ---
 
-def start_x_audio_download(url, headers=None, audio_quality='192'):
+def start_x_audio_download(url, headers=None, audio_quality="192"):
     download_id = str(uuid.uuid4())
     filename = generate_filename("xaudio")
     output_path = os.path.join(AUDIO_DIR, f"{filename}.mp3")
     cancel_event = threading.Event()
-    _download_locks[download_id] = cancel_event
+    register_cancel_event(download_id, cancel_event)
 
     def run():
-        update_status(download_id, {"status": "starting", "progress": 0, "speed": "0KB/s", "audio_url": None})
+        update_status(download_id, {
+            "status": "starting", "progress": 0, "speed": "0KB/s", "audio_url": None
+        })
+
         try:
             merged_headers = merge_headers_with_cookie(headers or {}, "x")
             cookie_file = _prepare_cookie_file(headers)
 
             ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': output_path,
-                'quiet': True,
-                'noplaylist': True,
-                'http_headers': merged_headers,
-                'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': audio_quality,
+                "format": "bestaudio/best",
+                "outtmpl": output_path,
+                "quiet": True,
+                "noplaylist": True,
+                "http_headers": merged_headers,
+                "progress_hooks": [lambda d: _progress_hook(d, download_id, cancel_event)],
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": audio_quality
                 }]
             }
 
             if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
+                ydl_opts["cookiefile"] = cookie_file
             if GLOBAL_PROXY:
-                ydl_opts['proxy'] = GLOBAL_PROXY
+                ydl_opts["proxy"] = GLOBAL_PROXY
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -184,11 +200,11 @@ def start_x_audio_download(url, headers=None, audio_quality='192'):
             })
 
         except Exception as e:
-            update_status(download_id, {"status": "error", "error": "❌ Twitter/X audio download failed."})
             traceback.print_exc()
+            update_status(download_id, {"status": "error", "error": "❌ X audio download failed"})
 
     thread = threading.Thread(target=run, daemon=True)
-    _download_threads[download_id] = thread
+    register_thread(download_id, thread)
     thread.start()
     return download_id
 
@@ -199,33 +215,40 @@ def start_x_video_download(url, resolution, headers=None, audio_lang=None, bandw
     filename = generate_filename("x")
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
     cancel_event = threading.Event()
-    _download_locks[download_id] = cancel_event
+    register_cancel_event(download_id, cancel_event)
 
     def run():
-        update_status(download_id, {"status": "starting", "progress": 0, "speed": "0KB/s", "video_url": None})
+        update_status(download_id, {
+            "status": "starting", "progress": 0, "speed": "0KB/s", "video_url": None
+        })
+
         try:
             merged_headers = merge_headers_with_cookie(headers or {}, "x")
             cookie_file = _prepare_cookie_file(headers)
             height = resolution.replace("p", "")
 
             ydl_opts = {
-                'format': f'bestvideo[height={height}]+bestaudio/best/best',
-                'outtmpl': output_path,
-                'quiet': True,
-                'noplaylist': True,
-                'merge_output_format': 'mp4',
-                'http_headers': merged_headers,
-                'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4'
-                }],
+                "format": f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]",
+                "outtmpl": output_path,
+                "quiet": True,
+                "noplaylist": True,
+                "merge_output_format": "mp4",
+                "http_headers": merged_headers,
+                "progress_hooks": [lambda d: _progress_hook(d, download_id, cancel_event)],
+                "postprocessors": [{
+                    "key": "FFmpegVideoConvertor",
+                    "preferedformat": "mp4"
+                }]
             }
 
             if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
+                ydl_opts["cookiefile"] = cookie_file
             if GLOBAL_PROXY:
-                ydl_opts['proxy'] = GLOBAL_PROXY
+                ydl_opts["proxy"] = GLOBAL_PROXY
+
+            rate = parse_bandwidth_limit(bandwidth_limit)
+            if rate:
+                ydl_opts["ratelimit"] = rate
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -250,10 +273,10 @@ def start_x_video_download(url, resolution, headers=None, audio_lang=None, bandw
             })
 
         except Exception as e:
-            update_status(download_id, {"status": "error", "error": "❌ Twitter/X video download failed."})
             traceback.print_exc()
+            update_status(download_id, {"status": "error", "error": "❌ X video download failed"})
 
     thread = threading.Thread(target=run, daemon=True)
-    _download_threads[download_id] = thread
+    register_thread(download_id, thread)
     thread.start()
     return download_id

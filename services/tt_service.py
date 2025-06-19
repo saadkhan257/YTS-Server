@@ -2,7 +2,6 @@
 
 import os
 import uuid
-import time
 import yt_dlp
 import tempfile
 import threading
@@ -14,21 +13,17 @@ from config import SERVER_URL
 from utils.platform_helper import merge_headers_with_cookie, get_cookie_file_for_platform
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
-from breakers.tt_protection_breaker import extract_info_with_selenium
+from utils.download_registry import register_thread, register_cancel_event
 
-# Paths
+# Constants
 VIDEO_DIR = 'static/videos'
 AUDIO_DIR = 'static/audios'
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
-
-# State
-GLOBAL_PROXY = os.getenv("YTS_PROXY") or None
 TEMP_COOKIE_SUFFIX = "_cookie.txt"
-_download_threads = {}
-_download_locks = {}
+GLOBAL_PROXY = os.getenv("YTS_PROXY")
 
-# --- Utils ---
+# --- Helpers ---
 
 def generate_filename(prefix="tt"):
     return f"{prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
@@ -38,8 +33,12 @@ def _prepare_cookie_file(headers):
         temp = tempfile.NamedTemporaryFile(delete=False, suffix=TEMP_COOKIE_SUFFIX, mode='w')
         temp.write(headers["Cookie"])
         temp.close()
+        print(f"[TT COOKIES] Using temp cookie: {temp.name}")
         return temp.name
-    return get_cookie_file_for_platform("tiktok")
+    fallback = get_cookie_file_for_platform("tiktok")
+    if fallback:
+        print(f"[TT COOKIES] Using fallback cookie: {fallback}")
+    return fallback
 
 def _progress_hook(d, download_id, cancel_event):
     if cancel_event.is_set():
@@ -62,52 +61,38 @@ def _progress_hook(d, download_id, cancel_event):
 def extract_tt_metadata(url, headers=None, download_id=None):
     download_id = download_id or str(uuid.uuid4())
     cancel_event = threading.Event()
-    _download_locks[download_id] = cancel_event
+    register_cancel_event(download_id, cancel_event)
     update_status(download_id, {"status": "extracting", "progress": 0, "speed": "0KB/s"})
 
-    merged_headers = merge_headers_with_cookie(headers or {}, "tiktok")
-    cookie_file = _prepare_cookie_file(headers)
-
-    ydl_opts = {
-        'quiet': True,
-        'skip_download': True,
-        'forcejson': True,
-        'noplaylist': True,
-        'extract_flat': False,
-        'http_headers': merged_headers,
-        'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
-    }
-
-    if cookie_file:
-        ydl_opts['cookiefile'] = cookie_file
-    if GLOBAL_PROXY:
-        ydl_opts['proxy'] = GLOBAL_PROXY
-
     try:
+        merged_headers = merge_headers_with_cookie(headers or {}, "tiktok")
+        cookie_file = _prepare_cookie_file(headers)
+
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "forcejson": True,
+            "noplaylist": True,
+            "extract_flat": False,
+            "http_headers": merged_headers,
+            "progress_hooks": [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
+        }
+
+        if cookie_file:
+            ydl_opts["cookiefile"] = cookie_file
+        if GLOBAL_PROXY:
+            ydl_opts["proxy"] = GLOBAL_PROXY
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"[YTDLP ❌] {e}")
-        print("[FALLBACK] Trying Selenium TikTok extractor...")
-        try:
-            info = extract_info_with_selenium(url, headers=headers)
-        except Exception as se:
-            update_status(download_id, {"status": "error", "error": str(se)})
-            return {"error": str(se), "download_id": download_id}
-
-    try:
-        duration = info.get("duration", 0)
-        resolutions = []
-        sizes = []
-        seen = set()
-        audioFormats = []
 
         formats = info.get("formats", [])
+        duration = info.get("duration", 0)
+        resolutions, sizes, seen = [], [], set()
+
         for f in formats:
-            if f.get("vcodec") == "none":
-                continue
             height = f.get("height")
-            if not height:
+            if not height or f.get("vcodec") == "none":
                 continue
             label = f"{height}p"
             if label in seen:
@@ -117,12 +102,6 @@ def extract_tt_metadata(url, headers=None, download_id=None):
             size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
             resolutions.append(label)
             sizes.append(size_str)
-
-        audioFormats.append({
-            "label": "Original",
-            "abr": "Original",
-            "size": sizes[0] if sizes else "Unknown"
-        })
 
         update_status(download_id, {"status": "ready"})
 
@@ -136,48 +115,56 @@ def extract_tt_metadata(url, headers=None, download_id=None):
             "video_url": url,
             "resolutions": resolutions,
             "sizes": sizes,
-            "audio_dubs": [],
-            "audioFormats": audioFormats
+            "audioFormats": [{
+                "label": "Original",
+                "abr": "Original",
+                "size": sizes[0] if sizes else "Unknown"
+            }],
+            "audio_dubs": []
         }
 
     except Exception as e:
-        update_status(download_id, {"status": "error", "error": str(e)})
-        return {"error": "❌ Failed to parse TikTok formats", "download_id": download_id}
+        print(f"[TT ❌ METADATA ERROR] {e}")
+        traceback.print_exc()
+        update_status(download_id, {"status": "error", "error": "❌ Failed to extract metadata"})
+        return {"error": "❌ Failed to extract metadata", "download_id": download_id}
 
 # --- Audio Download ---
 
 def start_tt_audio_download(url, headers=None, audio_quality='192'):
-    # TikTok doesn't offer separate audio stream, so we download video and convert to MP3
     download_id = str(uuid.uuid4())
     filename = generate_filename("ttaudio")
     output_path = os.path.join(AUDIO_DIR, f"{filename}.mp3")
     cancel_event = threading.Event()
-    _download_locks[download_id] = cancel_event
+    register_cancel_event(download_id, cancel_event)
 
     def run():
-        update_status(download_id, {"status": "starting", "progress": 0, "speed": "0KB/s", "audio_url": None})
+        update_status(download_id, {
+            "status": "starting", "progress": 0, "speed": "0KB/s", "audio_url": None
+        })
+
         try:
             merged_headers = merge_headers_with_cookie(headers or {}, "tiktok")
             cookie_file = _prepare_cookie_file(headers)
 
             ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': output_path,
-                'quiet': True,
-                'noplaylist': True,
-                'http_headers': merged_headers,
-                'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': audio_quality,
+                "format": "bestaudio/best",
+                "outtmpl": output_path,
+                "quiet": True,
+                "noplaylist": True,
+                "http_headers": merged_headers,
+                "progress_hooks": [lambda d: _progress_hook(d, download_id, cancel_event)],
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": audio_quality
                 }]
             }
 
             if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
+                ydl_opts["cookiefile"] = cookie_file
             if GLOBAL_PROXY:
-                ydl_opts['proxy'] = GLOBAL_PROXY
+                ydl_opts["proxy"] = GLOBAL_PROXY
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -192,6 +179,7 @@ def start_tt_audio_download(url, headers=None, audio_quality='192'):
                 "speed": "0KB/s",
                 "audio_url": f"{SERVER_URL}/audios/{os.path.basename(output_path)}"
             })
+
             save_to_history({
                 "id": download_id,
                 "title": os.path.basename(output_path),
@@ -201,11 +189,11 @@ def start_tt_audio_download(url, headers=None, audio_quality='192'):
             })
 
         except Exception as e:
-            update_status(download_id, {"status": "error", "error": "❌ Audio download failed."})
             traceback.print_exc()
+            update_status(download_id, {"status": "error", "error": "❌ TikTok audio download failed"})
 
     thread = threading.Thread(target=run, daemon=True)
-    _download_threads[download_id] = thread
+    register_thread(download_id, thread)
     thread.start()
     return download_id
 
@@ -216,33 +204,53 @@ def start_tt_video_download(url, resolution, headers=None, audio_lang=None, band
     filename = generate_filename("tt")
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
     cancel_event = threading.Event()
-    _download_locks[download_id] = cancel_event
+    register_cancel_event(download_id, cancel_event)
+
+    def parse_bandwidth_limit(limit):
+        if not limit:
+            return None
+        if isinstance(limit, (int, float)):
+            return limit * 1024
+        if isinstance(limit, str):
+            limit = limit.strip().upper()
+            units = {"K": 1024, "M": 1024**2, "G": 1024**3}
+            for suffix, factor in units.items():
+                if limit.endswith(suffix):
+                    return float(limit[:-1]) * factor
+        return None
 
     def run():
-        update_status(download_id, {"status": "starting", "progress": 0, "speed": "0KB/s", "video_url": None})
+        update_status(download_id, {
+            "status": "starting", "progress": 0, "speed": "0KB/s", "video_url": None
+        })
+
         try:
             merged_headers = merge_headers_with_cookie(headers or {}, "tiktok")
             cookie_file = _prepare_cookie_file(headers)
             height = resolution.replace("p", "")
 
             ydl_opts = {
-                'format': f'bestvideo[height={height}]/best',
-                'outtmpl': output_path,
-                'quiet': True,
-                'noplaylist': True,
-                'merge_output_format': 'mp4',
-                'http_headers': merged_headers,
-                'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4'
-                }],
+                "format": f"bestvideo[height={height}]+bestaudio/best[height={height}]",
+                "outtmpl": output_path,
+                "quiet": True,
+                "noplaylist": True,
+                "merge_output_format": "mp4",
+                "http_headers": merged_headers,
+                "progress_hooks": [lambda d: _progress_hook(d, download_id, cancel_event)],
+                "postprocessors": [{
+                    "key": "FFmpegVideoConvertor",
+                    "preferedformat": "mp4"
+                }]
             }
 
             if cookie_file:
-                ydl_opts['cookiefile'] = cookie_file
+                ydl_opts["cookiefile"] = cookie_file
             if GLOBAL_PROXY:
-                ydl_opts['proxy'] = GLOBAL_PROXY
+                ydl_opts["proxy"] = GLOBAL_PROXY
+
+            rate = parse_bandwidth_limit(bandwidth_limit)
+            if rate:
+                ydl_opts["ratelimit"] = rate
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -267,10 +275,10 @@ def start_tt_video_download(url, resolution, headers=None, audio_lang=None, band
             })
 
         except Exception as e:
-            update_status(download_id, {"status": "error", "error": "❌ TikTok video download failed."})
             traceback.print_exc()
+            update_status(download_id, {"status": "error", "error": "❌ TikTok video download failed"})
 
     thread = threading.Thread(target=run, daemon=True)
-    _download_threads[download_id] = thread
+    register_thread(download_id, thread)
     thread.start()
     return download_id

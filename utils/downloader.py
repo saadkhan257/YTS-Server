@@ -7,7 +7,7 @@ from config import VIDEO_DIR, AUDIO_DIR, SERVER_URL
 from utils.platform_helper import detect_platform
 from utils.status_manager import update_status
 
-# Direct imports of all platform service files
+# Platform service imports
 from services.yt_service import (
     extract_yt_metadata,
     start_yt_audio_download,
@@ -38,12 +38,11 @@ from services.ig_service import (
     start_ig_video_download
 )
 
-
-# Internal thread + cancel tracking
+# Internal state tracking
 _download_threads = {}
 _download_locks = {}
 
-# Map platform to proper handlers
+# Service mapping
 SERVICE_MAP = {
     "youtube": {
         "meta": extract_yt_metadata,
@@ -72,8 +71,7 @@ SERVICE_MAP = {
     },
 }
 
-
-# --- Public API ---
+# --- Public APIs ---
 
 def get_video_info(url, headers=None, download_id=None):
     platform = detect_platform(url)
@@ -86,9 +84,12 @@ def get_video_info(url, headers=None, download_id=None):
         }
 
     try:
-        return service["meta"](url, headers=headers, download_id=download_id)
+        result = service["meta"](url, headers=headers, download_id=download_id)
+        if "error" in result:
+            print(f"[❌ METADATA] Platform: {platform}, Error: {result['error']}")
+        return result
     except Exception as e:
-        print(f"[METADATA ERROR] {platform}: {e}")
+        print(f"[❌ METADATA EXCEPTION] {platform}: {str(e)}")
         traceback.print_exc()
         return {
             "error": f"❌ Failed to extract metadata from {platform}: {str(e)}",
@@ -106,7 +107,7 @@ def start_audio_download(url, headers=None, audio_quality="192"):
     try:
         return service["audio"](url, headers=headers, audio_quality=audio_quality)
     except Exception as e:
-        print(f"[AUDIO ERROR] {platform}: {e}")
+        print(f"[❌ AUDIO ERROR] Platform: {platform}, Error: {str(e)}")
         traceback.print_exc()
         return {"error": f"❌ Audio download failed on {platform}: {str(e)}"}
 
@@ -127,7 +128,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             bandwidth_limit=bandwidth_limit
         )
     except Exception as e:
-        print(f"[VIDEO ERROR] {platform}: {e}")
+        print(f"[❌ VIDEO ERROR] Platform: {platform}, Error: {str(e)}")
         traceback.print_exc()
         return {"error": f"❌ Video download failed on {platform}: {str(e)}"}
 
@@ -140,12 +141,10 @@ def cancel_download(download_id):
         return True
     return False
 
-
-# --- Internal Utilities for service modules ---
+# --- Internal Registration ---
 
 def register_thread(download_id, thread):
     _download_threads[download_id] = thread
-
 
 def register_cancel_event(download_id, cancel_event):
     _download_locks[download_id] = cancel_event

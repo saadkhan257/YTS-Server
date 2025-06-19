@@ -1,5 +1,3 @@
-# services/yt_service.py
-
 import os
 import uuid
 import yt_dlp
@@ -15,18 +13,17 @@ from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from utils.download_registry import register_thread, register_cancel_event
 
-
 # Constants
 AUDIO_DIR = 'static/audios'
 os.makedirs(AUDIO_DIR, exist_ok=True)
-MP4_EXTENSIONS = {"mp4", "m4v", "mov"}
+
 SUPPORTED_AUDIO_FORMATS = {"m4a", "mp3", "aac", "opus"}
+MP4_EXTENSIONS = {"mp4", "m4v", "mov"}
 GLOBAL_PROXY = os.getenv("YTS_PROXY")
 TEMP_COOKIE_SUFFIX = "_cookie.txt"
+
 _download_threads = {}
 _download_locks = {}
-
-# --- Helpers ---
 
 def generate_filename(prefix="YTSx"):
     return f"{prefix}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=12))}"
@@ -56,6 +53,7 @@ def _progress_hook(d, download_id, cancel_event):
         "speed": speed_str
     })
 
+
 # --- Metadata Extraction ---
 
 def extract_yt_metadata(url, headers=None, download_id=None):
@@ -76,12 +74,9 @@ def extract_yt_metadata(url, headers=None, download_id=None):
         'extract_flat': False,
         'http_headers': merged_headers,
         'progress_hooks': [lambda _: cancel_event.is_set() and (_ for _ in ()).throw(Exception("Cancelled"))],
+        'cookiefile': cookie_file if cookie_file else None,
+        'proxy': GLOBAL_PROXY if GLOBAL_PROXY else None,
     }
-
-    if cookie_file:
-        ydl_opts['cookiefile'] = cookie_file
-    if GLOBAL_PROXY:
-        ydl_opts['proxy'] = GLOBAL_PROXY
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -95,7 +90,6 @@ def extract_yt_metadata(url, headers=None, download_id=None):
         audio_dubs = []
         seen_dubs = set()
 
-        # Audio formats
         for f in formats:
             if f.get("vcodec") == "none" and f.get("acodec") != "none" and f.get("abr") and f.get("ext") in SUPPORTED_AUDIO_FORMATS:
                 label = f"{int(f['abr'])}K"
@@ -110,8 +104,7 @@ def extract_yt_metadata(url, headers=None, download_id=None):
                         "size": size_str
                     }
 
-        # Audio dubs
-        for f in formats:
+            # Audio dubs
             lang = f.get("language") or f.get("language_code")
             if lang and f.get("vcodec") == "none":
                 lang_lower = lang.lower()
@@ -122,8 +115,7 @@ def extract_yt_metadata(url, headers=None, download_id=None):
                         "label": lang.upper()
                     })
 
-        # Video resolutions
-        for f in formats:
+            # Video formats
             if not f.get("height") or f.get("vcodec") == "none" or f.get("ext") not in MP4_EXTENSIONS:
                 continue
             label = f"{f['height']}p"
@@ -154,9 +146,11 @@ def extract_yt_metadata(url, headers=None, download_id=None):
         }
 
     except Exception as e:
-        print(f"[YT ❌ METADATA] {e}")
+        traceback.print_exc()
+        print(f"[YT ❌ METADATA ERROR] {str(e)}")
         update_status(download_id, {"status": "error", "error": "❌ Failed to extract metadata"})
         return {"error": "❌ Failed to extract metadata", "download_id": download_id}
+
 
 # --- Audio Download ---
 

@@ -1,19 +1,14 @@
 import os
 import json
 import threading
-from flask import Flask, request, jsonify, send_from_directory, make_response, Response, abort, session
+from flask import Flask, request, jsonify, send_from_directory, make_response, abort, session
 from flask_cors import CORS
 
+from config import VIDEO_DIR, AUDIO_DIR
 from utils.status_manager import get_status, update_status
 from utils.history_manager import load_history
 from utils.cleanup import cleanup_old_files
-from utils.platform_helper import detect_platform
-from utils.download_registry import cancel_event_map
-
-from services.yt_service import extract_yt_metadata, start_yt_audio_download, start_yt_video_download
-from services.tt_service import extract_tt_metadata, start_tt_video_download
-from services.fb_service import extract_fb_metadata, start_fb_audio_download, start_fb_video_download
-from services.ig_service import extract_ig_metadata, start_ig_video_download
+from utils.downloader import get_video_info, start_audio_download, start_download, cancel_download
 
 # ✅ App Setup
 app = Flask(__name__)
@@ -21,38 +16,33 @@ CORS(app)
 app.secret_key = 'supersecretkeychangeit'
 
 # ✅ Directory Setup
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-VIDEO_DIR = os.path.join(BASE_DIR, "static", "videos")
-AUDIO_DIR = os.path.join(BASE_DIR, "static", "audios")
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# ✅ Start Cleanup
+# ✅ Background Cleanup Thread
 def start_background_tasks():
     threading.Thread(target=cleanup_old_files, daemon=True).start()
 
 start_background_tasks()
 
-# ✅ Admin Credentials
+# ✅ Admin Login (console)
 VALID_USERNAME = "forest_dev"
 VALID_PASSWORD = "yts$4dm1n"
 
-# ✅ Root
+# --- Routes ---
+
 @app.route('/')
 def home():
     return send_from_directory("web/templates", "index.html")
 
-# ✅ Serve Videos
 @app.route('/videos/<path:filename>')
 def serve_video(filename):
     return serve_media_file(VIDEO_DIR, filename)
 
-# ✅ Serve Audios
 @app.route('/audios/<path:filename>')
 def serve_audio(filename):
     return serve_media_file(AUDIO_DIR, filename)
 
-# ✅ Shared Media Serve Logic
 def serve_media_file(directory, filename):
     try:
         file_path = os.path.join(directory, filename)
@@ -82,7 +72,7 @@ def serve_media_file(directory, filename):
     except Exception as e:
         return jsonify({'error': f'Failed to serve file: {str(e)}'}), 500
 
-# ✅ /fetch_info
+# ✅ /fetch_info → Metadata extraction
 @app.route('/fetch_info', methods=['POST'])
 def fetch_info():
     try:
@@ -91,26 +81,12 @@ def fetch_info():
         if not url:
             abort(400, "URL is required.")
 
-        platform = detect_platform(url)
-        headers = request.headers
-
-        print(f"[FETCH] {platform.upper()} metadata → {url}")
-
-        if platform == "youtube":
-            return jsonify(extract_yt_metadata(url, headers))
-        elif platform == "tiktok":
-            return jsonify(extract_tt_metadata(url, headers))
-        elif platform == "facebook":
-            return jsonify(extract_fb_metadata(url, headers))
-        elif platform == "instagram":
-            return jsonify(extract_ig_metadata(url, headers))
-        else:
-            return jsonify({'error': 'Unsupported platform'}), 400
-
+        headers = dict(request.headers)
+        return jsonify(get_video_info(url, headers=headers))
     except Exception as e:
-        return jsonify({'error': f'Exception during fetch: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to fetch metadata: {str(e)}'}), 500
 
-# ✅ /download
+# ✅ /download → Video or Audio download
 @app.route('/download', methods=['POST'])
 def download():
     try:
@@ -120,50 +96,37 @@ def download():
         type_ = data.get('type', 'video').strip().lower()
         audio_lang = data.get('audio_lang')
         bandwidth = data.get('bandwidth_limit')
+        headers = dict(request.headers)
 
         if not url or not quality:
             return jsonify({'error': 'Missing URL or quality'}), 400
 
-        platform = detect_platform(url)
-        headers = request.headers
-        print(f"[DOWNLOAD] Platform={platform}, Type={type_}, Quality={quality}, Lang={audio_lang}")
-
-        if platform == "youtube":
-            if type_ == "audio":
-                download_id = start_yt_audio_download(url, headers, audio_quality=quality)
-            else:
-                download_id = start_yt_video_download(url, quality, headers, audio_lang, bandwidth)
-        elif platform == "tiktok":
-            download_id = start_tt_video_download(url, quality, headers)
-        elif platform == "facebook":
-            if type_ == "audio":
-                download_id = start_fb_audio_download(url, headers)
-            else:
-                download_id = start_fb_video_download(url, quality, headers, audio_lang, bandwidth)
-        elif platform == "instagram":
-            download_id = start_ig_video_download(url, quality, headers)
+        if type_ == 'audio':
+            result = start_audio_download(url, headers=headers, audio_quality=quality)
         else:
-            return jsonify({'error': 'Unsupported platform'}), 400
+            result = start_download(
+                url,
+                resolution=quality,
+                bandwidth_limit=bandwidth,
+                headers=headers,
+                audio_lang=audio_lang
+            )
 
-        return jsonify({'download_id': download_id, 'status': 'started'})
-
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
 
-# ✅ /cancel
+# ✅ /cancel/<download_id> → Cancel a download
 @app.route('/cancel/<download_id>', methods=['POST'])
 def cancel(download_id):
     try:
-        cancel_event = cancel_event_map.get(download_id)
-        if cancel_event:
-            cancel_event.set()
-            update_status(download_id, {"status": "cancelled"})
+        if cancel_download(download_id):
             return jsonify({'status': 'cancelled'})
         return jsonify({'error': 'Invalid download ID'}), 400
     except Exception as e:
         return jsonify({'error': f'Failed to cancel: {str(e)}'}), 500
 
-# ✅ /status
+# ✅ /status/<download_id> → Track download progress
 @app.route('/status/<download_id>')
 def status(download_id):
     try:
@@ -174,7 +137,7 @@ def status(download_id):
     except Exception as e:
         return jsonify({'error': f'Status check failed: {str(e)}'}), 500
 
-# ✅ /history
+# ✅ /history → Get download history
 @app.route('/history')
 def history():
     try:
@@ -182,7 +145,7 @@ def history():
     except Exception as e:
         return jsonify({'error': f'Failed to load history: {str(e)}'}), 500
 
-# ✅ /extract
+# ✅ /extract → Extract metadata for WebView
 @app.route('/extract', methods=['POST'])
 def extract_from_webview():
     try:
@@ -190,12 +153,13 @@ def extract_from_webview():
         url = data.get('url', '').strip()
         if not url:
             return jsonify({'error': 'URL is required'}), 400
+        headers = dict(request.headers)
         print(f"[EXTRACT] Extracting from WebView: {url}")
-        return jsonify(get_video_info(url))
+        return jsonify(get_video_info(url, headers=headers))
     except Exception as e:
         return jsonify({'error': f'Failed to extract info: {str(e)}'}), 500
 
-# ✅ /api/login
+# ✅ /api/login → Web Admin login
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -207,7 +171,7 @@ def login():
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
-# ✅ /api/exec
+# ✅ /api/exec → Code executor (only for admin)
 @app.route('/api/exec', methods=['POST'])
 def exec_code():
     if not session.get('authenticated'):
@@ -229,21 +193,6 @@ def exec_code():
 def dummy_block():
     return '', 204
 
-# ✅ Manual fallback
-def get_video_info(url):
-    platform = detect_platform(url)
-    headers = request.headers
-    if platform == "youtube":
-        return extract_yt_metadata(url, headers)
-    elif platform == "tiktok":
-        return extract_tt_metadata(url, headers)
-    elif platform == "facebook":
-        return extract_fb_metadata(url, headers)
-    elif platform == "instagram":
-        return extract_ig_metadata(url, headers)
-    else:
-        return {"error": "Unsupported platform"}
-
-# ✅ Start App
+# ✅ Run Server
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

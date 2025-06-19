@@ -1,48 +1,52 @@
 import os
 import json
 import threading
-from flask import Flask, request, jsonify, send_from_directory, make_response, abort, session
+from flask import Flask, request, jsonify, send_from_directory, make_response, Response, abort, session
 from flask_cors import CORS
 
-from config import VIDEO_DIR, AUDIO_DIR
-from utils.status_manager import get_status, update_status
+from utils.downloader import get_video_info, start_download, cancel_download
+from utils.status_manager import get_status
 from utils.history_manager import load_history
-from utils.cleanup import cleanup_old_files
-from utils.downloader import get_video_info, start_audio_download, start_download, cancel_download
-
-# ✅ App Setup
+from utils.cleanup import cleanup_old_files, cleanup_old_videos
+# ✅ Initialize Flask App
 app = Flask(__name__)
 CORS(app)
 app.secret_key = 'supersecretkeychangeit'
 
 # ✅ Directory Setup
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+VIDEO_DIR = os.path.join(BASE_DIR, "static", "videos")
+AUDIO_DIR = os.path.join(BASE_DIR, "static", "audios")
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# ✅ Background Cleanup Thread
+# ✅ Background Cleanup Task
 def start_background_tasks():
     threading.Thread(target=cleanup_old_files, daemon=True).start()
 
+
 start_background_tasks()
 
-# ✅ Admin Login (console)
+# ✅ Credentials
 VALID_USERNAME = "forest_dev"
 VALID_PASSWORD = "yts$4dm1n"
 
-# --- Routes ---
-
+# ✅ Home Route (Web Console)
 @app.route('/')
 def home():
     return send_from_directory("web/templates", "index.html")
 
+# ✅ Serve Downloaded Videos
 @app.route('/videos/<path:filename>')
 def serve_video(filename):
     return serve_media_file(VIDEO_DIR, filename)
 
+# ✅ Serve Downloaded Audios
 @app.route('/audios/<path:filename>')
 def serve_audio(filename):
     return serve_media_file(AUDIO_DIR, filename)
 
+# ✅ Shared Serve Logic
 def serve_media_file(directory, filename):
     try:
         file_path = os.path.join(directory, filename)
@@ -51,10 +55,12 @@ def serve_media_file(directory, filename):
 
         ext = os.path.splitext(filename)[1].lower()
         mime_type = {
+            # Video
             '.mp4': 'video/mp4',
             '.webm': 'video/webm',
             '.mkv': 'video/x-matroska',
             '.mov': 'video/quicktime',
+            # Audio
             '.mp3': 'audio/mpeg',
             '.m4a': 'audio/mp4',
             '.aac': 'audio/aac',
@@ -72,7 +78,7 @@ def serve_media_file(directory, filename):
     except Exception as e:
         return jsonify({'error': f'Failed to serve file: {str(e)}'}), 500
 
-# ✅ /fetch_info → Metadata extraction
+# ✅ Fetch Video Info (URL)
 @app.route('/fetch_info', methods=['POST'])
 def fetch_info():
     try:
@@ -80,53 +86,58 @@ def fetch_info():
         url = data.get('url', '').strip()
         if not url:
             abort(400, "URL is required.")
+        print(f"[INFO] Fetching metadata for: {url}")
 
-        headers = dict(request.headers)
-        return jsonify(get_video_info(url, headers=headers))
+        video_info = get_video_info(url)
+        return Response(json.dumps(video_info), content_type='application/json')
     except Exception as e:
-        return jsonify({'error': f'Failed to fetch metadata: {str(e)}'}), 500
+        return jsonify({'error': f'Exception during fetch: {str(e)}'}), 500
 
-# ✅ /download → Video or Audio download
+# ✅ In-App Browser Extraction (WebView)
+@app.route('/extract', methods=['POST'])
+def extract_from_webview():
+    try:
+        data = request.get_json(force=True)
+        url = data.get('url', '').strip()
+        if not url:
+            return jsonify({'error': 'URL is required'}), 400
+        print(f"[EXTRACT] Extracting from WebView: {url}")
+
+        return jsonify(get_video_info(url))
+    except Exception as e:
+        return jsonify({'error': f'Failed to extract info: {str(e)}'}), 500
+
+# ✅ Start Download
 @app.route('/download', methods=['POST'])
 def download():
     try:
         data = request.get_json(force=True)
         url = data.get('url', '').strip()
         quality = data.get('quality', '').strip()
-        type_ = data.get('type', 'video').strip().lower()
-        audio_lang = data.get('audio_lang')
-        bandwidth = data.get('bandwidth_limit')
-        headers = dict(request.headers)
+        type_ = data.get('type', 'video').strip().lower()  # 'audio' or 'video'
 
         if not url or not quality:
             return jsonify({'error': 'Missing URL or quality'}), 400
 
-        if type_ == 'audio':
-            result = start_audio_download(url, headers=headers, audio_quality=quality)
-        else:
-            result = start_download(
-                url,
-                resolution=quality,
-                bandwidth_limit=bandwidth,
-                headers=headers,
-                audio_lang=audio_lang
-            )
+        print(f"[DOWNLOAD] Starting for: {url} [{type_}]")
 
-        return jsonify(result)
+        download_id = start_download(url, quality, type_)
+        return jsonify({'download_id': download_id, 'status': 'started'})
     except Exception as e:
         return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
 
-# ✅ /cancel/<download_id> → Cancel a download
+# ✅ Cancel Download
 @app.route('/cancel/<download_id>', methods=['POST'])
 def cancel(download_id):
     try:
-        if cancel_download(download_id):
+        success = cancel_download(download_id)
+        if success:
             return jsonify({'status': 'cancelled'})
-        return jsonify({'error': 'Invalid download ID'}), 400
+        return jsonify({'error': 'Invalid download ID or already finished'}), 400
     except Exception as e:
         return jsonify({'error': f'Failed to cancel: {str(e)}'}), 500
 
-# ✅ /status/<download_id> → Track download progress
+# ✅ Check Download Status
 @app.route('/status/<download_id>')
 def status(download_id):
     try:
@@ -137,7 +148,7 @@ def status(download_id):
     except Exception as e:
         return jsonify({'error': f'Status check failed: {str(e)}'}), 500
 
-# ✅ /history → Get download history
+# ✅ Download History
 @app.route('/history')
 def history():
     try:
@@ -145,21 +156,7 @@ def history():
     except Exception as e:
         return jsonify({'error': f'Failed to load history: {str(e)}'}), 500
 
-# ✅ /extract → Extract metadata for WebView
-@app.route('/extract', methods=['POST'])
-def extract_from_webview():
-    try:
-        data = request.get_json(force=True)
-        url = data.get('url', '').strip()
-        if not url:
-            return jsonify({'error': 'URL is required'}), 400
-        headers = dict(request.headers)
-        print(f"[EXTRACT] Extracting from WebView: {url}")
-        return jsonify(get_video_info(url, headers=headers))
-    except Exception as e:
-        return jsonify({'error': f'Failed to extract info: {str(e)}'}), 500
-
-# ✅ /api/login → Web Admin login
+# ✅ Developer Login (Admin UI)
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -171,7 +168,7 @@ def login():
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
-# ✅ /api/exec → Code executor (only for admin)
+# ✅ Built-in Terminal
 @app.route('/api/exec', methods=['POST'])
 def exec_code():
     if not session.get('authenticated'):
@@ -186,13 +183,13 @@ def exec_code():
     except Exception as e:
         return jsonify({'error': str(e)})
 
-# ✅ Dummy Routes
+# ✅ Dummy Routes (block bots)
 @app.route('/favicon.ico')
 @app.route('/ads.txt')
 @app.route('/robots.txt')
 def dummy_block():
     return '', 204
 
-# ✅ Run Server
+# ✅ Run the App (Local Dev)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

@@ -105,7 +105,7 @@ def download():
         audio_quality = data.get('audio_quality')
         resolution = data.get('resolution')
         audio_lang = data.get('audio_lang')  # Optional for dubs
-        headers = request.headers
+        headers = dict(request.headers)
 
         if not url:
             return jsonify({'error': 'Missing video URL'}), 400

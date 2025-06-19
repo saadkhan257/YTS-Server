@@ -33,7 +33,7 @@ FILENAME_MAP = {
     'facebook': 'fb_cookies.txt',
     'instagram': 'ig_cookies.txt',
     'tiktok': 'tt_cookies.txt',
-    'twitter': 'tw_cookies.txt',
+    'x': 'x_cookies.txt',
     'threads': 'threads_cookies.txt',
 }
 

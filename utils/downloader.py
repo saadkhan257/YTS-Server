@@ -20,6 +20,7 @@ from utils.platform_helper import (
 from utils.status_manager import update_status
 from utils.history_manager import save_to_history
 from services.tiktok_service import extract_info_with_selenium
+from utils.vid_to_mp3_converter import convert_video_to_mp3
 
 
 # --- [ABOVE THIS LINE IS ALL YOUR ORIGINAL IMPORTS & CONSTANTS] ---
@@ -30,9 +31,10 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 # --- Save as Audio (MP3) Download ---
 
 def start_audio_download(url, headers=None, audio_quality='192'):
+
     download_id = str(uuid.uuid4())
-    filename = generate_filename(prefix="audio")
-    output_path = os.path.join(AUDIO_DIR, f"{filename}.mp3")
+    slug = download_id[:8]
+    temp_video_path = os.path.join(tempfile.gettempdir(), f"{slug}_temp_video.mp4")
     platform = detect_platform(url)
     cancel_event = threading.Event()
     _download_locks[download_id] = cancel_event
@@ -49,24 +51,13 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            # Audio-only format selector
-            abr_format = f"bestaudio[abr={audio_quality}][ext=mp3]"
-            fallback = "bestaudio[ext=mp3]/bestaudio"
-            format_selector = f"{abr_format}/{fallback}"
-
             ydl_opts = {
-                'format': format_selector,
-                'outtmpl': output_path,
+                'format': 'bestvideo+bestaudio/best',
+                'outtmpl': temp_video_path,
                 'quiet': True,
                 'noplaylist': True,
-                'merge_output_format': 'mp3',
                 'http_headers': merged_headers,
                 'progress_hooks': [lambda d: _progress_hook(d, download_id, cancel_event)],
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': audio_quality,
-                }],
             }
 
             if cookie_file:
@@ -74,32 +65,49 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
-            print(f"[AUDIO] 🎧 Requesting: {url}")
+            print(f"[AUDIO MODE] 🔽 Downloading video for audio conversion: {url}")
             start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
             elapsed = time.time() - start_time
+            print(f"[AUDIO MODE] ✅ Video downloaded in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
                 return
 
-            if not os.path.exists(output_path) or os.path.getsize(output_path) < 100 * 1024:
-                raise Exception("Audio download succeeded but file is missing or too small.")
+            if not os.path.exists(temp_video_path) or os.path.getsize(temp_video_path) < 100 * 1024:
+                raise Exception("Video download failed or too small to convert.")
+
+            # --- CONVERSION ---
+            update_status(download_id, {
+                "status": "converting",
+                "progress": 95,
+                "speed": "0KB/s"
+            })
+
+            final_audio_path = convert_video_to_mp3(
+                temp_video_path,
+                target_bitrate=audio_quality,
+                slug=slug
+            )
+
+            if not final_audio_path or not os.path.exists(final_audio_path):
+                raise Exception("Audio conversion failed.")
 
             update_status(download_id, {
                 "status": "completed",
                 "progress": 100,
                 "speed": "0KB/s",
-                "audio_url": f"{SERVER_URL}/audios/{os.path.basename(output_path)}"
+                "audio_url": f"{SERVER_URL}/media/{os.path.basename(final_audio_path)}"
             })
 
             save_to_history({
                 "id": download_id,
-                "title": os.path.basename(output_path),
+                "title": os.path.basename(final_audio_path),
                 "resolution": f"{audio_quality}K",
                 "status": "completed",
-                "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
+                "size": round(os.path.getsize(final_audio_path) / 1024 / 1024, 2)
             })
 
         except yt_dlp.utils.DownloadError as e:

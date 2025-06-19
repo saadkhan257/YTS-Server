@@ -101,21 +101,41 @@ def extract_from_webview():
 def download():
     try:
         data = request.get_json(force=True)
-        url = data.get('url', '').strip()
-        audio_quality = data.get('audio_quality')
-        resolution = data.get('resolution')
-        audio_lang = data.get('audio_lang')  # Optional for dubs
 
-        headers = dict(request.headers)  # ✅ FIXED — convert EnvironHeaders to dict
-
-        if not url:
+        # ✅ Clean and normalize URL
+        raw_url = data.get('url', '').strip()
+        if not raw_url:
             return jsonify({'error': 'Missing video URL'}), 400
 
+        url = (
+            raw_url.replace("m.youtube.com/shorts/", "www.youtube.com/watch?v=")
+                   .replace("youtube.com/shorts/", "youtube.com/watch?v=")
+                   .replace("m.youtube.com/watch?v=", "www.youtube.com/watch?v=")
+        )
+
+        # ✅ Clean headers (avoid EnvironHeaders error)
+        headers = dict(request.headers)
+
+        # ✅ Extract parameters
+        audio_quality = data.get('audio_quality')
+        resolution = data.get('resolution')
+        audio_lang = data.get('audio_lang')  # Optional for dubbed videos
+
+        # ✅ Normalize resolution to ensure it's like "720p"
+        if resolution:
+            res_digits = ''.join(filter(str.isdigit, resolution))
+            if res_digits:
+                resolution = f"{res_digits}p"
+            else:
+                resolution = None
+
+        # ✅ Debug log
         print(f"[DOWNLOAD] Starting → {url}")
         print(f"         ├── audio_quality: {audio_quality}")
         print(f"         ├── resolution: {resolution}")
         print(f"         └── language: {audio_lang}")
 
+        # ✅ Hybrid Logic
         if audio_quality:
             download_id = start_audio_download(url, headers=headers, audio_quality=audio_quality)
         elif resolution:
@@ -124,7 +144,9 @@ def download():
             return jsonify({'error': 'Missing resolution or audio quality'}), 400
 
         return jsonify({'download_id': download_id, 'status': 'started'})
+
     except Exception as e:
+        print(f"[DOWNLOAD ERROR] {str(e)}")
         return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
 
 # ✅ Cancel

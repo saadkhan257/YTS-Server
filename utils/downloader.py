@@ -356,7 +356,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
                 base_audio += f"[language^{audio_lang}]"
 
             ydl_opts = {
-                'format': f"{base_video}+{base_audio}/best[ext=mp4][height={height}]",
+                'format': f"{base_video}+{base_audio}/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
                 'outtmpl': output_path,
                 'quiet': True,
                 'noplaylist': True,

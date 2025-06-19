@@ -1,5 +1,3 @@
-# downloader.py
-
 import os
 import uuid
 import threading
@@ -19,7 +17,6 @@ _download_threads = {}
 _download_locks = {}
 
 # --- Auto Service Loader ---
-
 SERVICE_MAP = {}
 
 def _load_all_services():
@@ -33,18 +30,27 @@ def _load_all_services():
 
 _load_all_services()
 
-# --- Unified Dispatch Logic ---
-
+# --- Function Resolver ---
 def _get_service_function(platform, function_suffix):
     service = SERVICE_MAP.get(platform)
     if not service:
         raise Exception(f"❌ Unsupported platform: {platform}")
-    fn_name = f"{function_suffix}_{platform}_{'download' if 'download' in function_suffix else 'metadata'}"
+
+    fn_name = None
+    if function_suffix == "extract":
+        fn_name = f"extract_{platform}_metadata"
+    elif function_suffix == "start":
+        fn_name = f"start_{platform}_download"
+    elif function_suffix == "start_audio":
+        fn_name = f"start_audio_{platform}_download"
+    else:
+        raise Exception(f"❌ Unknown function suffix: {function_suffix}")
+
     if not hasattr(service, fn_name):
-        raise Exception(f"❌ Function `{fn_name}` not found in {platform}_service.py")
+        raise Exception(f"❌ `{fn_name}()` not found in {platform}_service.py")
     return getattr(service, fn_name)
 
-# --- Public API Functions ---
+# --- Unified Public APIs ---
 
 def extract_metadata(url, headers=None, download_id=None):
     platform = detect_platform(url)
@@ -71,7 +77,7 @@ def start_audio_download(url, headers=None, audio_quality='192'):
         audio_quality=audio_quality
     )
 
-# --- Download Control Functions ---
+# --- Download Controls ---
 
 def cancel_download(download_id):
     cancel_event = _download_locks.get(download_id)
@@ -82,17 +88,19 @@ def cancel_download(download_id):
     return False
 
 def pause_download(download_id):
-    # Placeholder for future pause
+    # Placeholder for future pause support
     return False
 
 def resume_download(download_id):
-    # Placeholder for future resume
+    # Placeholder for future resume support
     return False
+
+# --- Convenience Aliases ---
 
 def get_video_info(url, headers=None, download_id=None):
     return extract_metadata(url, headers=headers, download_id=download_id)
 
-# --- Thread Access (shared for services) ---
+# --- Shared Thread Map Access ---
 
 def get_download_thread_map():
     return _download_threads, _download_locks

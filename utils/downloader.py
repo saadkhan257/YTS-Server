@@ -49,10 +49,10 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            # Try to prefer matching abr, else fallback to bestaudio
-            abr_format = f"bestaudio[abr={audio_quality}]"
-            fallback_format = "bestaudio"
-            format_selector = f"{abr_format}/{fallback_format}"
+            # Audio-only format selector
+            abr_format = f"bestaudio[abr={audio_quality}][ext=mp3]"
+            fallback = "bestaudio[ext=mp3]/bestaudio"
+            format_selector = f"{abr_format}/{fallback}"
 
             ydl_opts = {
                 'format': format_selector,
@@ -74,19 +74,18 @@ def start_audio_download(url, headers=None, audio_quality='192'):
             if GLOBAL_PROXY:
                 ydl_opts['proxy'] = GLOBAL_PROXY
 
+            print(f"[AUDIO] 🎧 Requesting: {url}")
             start_time = time.time()
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print(f"[AUDIO DL] 🎵 Downloading audio from {url} (quality: {audio_quality}K)")
-                result = ydl.download([url])
+                ydl.download([url])
             elapsed = time.time() - start_time
-            print(f"[AUDIO DL] ✅ Finished in {round(elapsed, 2)}s")
 
             if cancel_event.is_set():
                 update_status(download_id, {"status": "cancelled"})
                 return
 
-            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                raise FileNotFoundError("Audio download succeeded but file not found or empty.")
+            if not os.path.exists(output_path) or os.path.getsize(output_path) < 100 * 1024:
+                raise Exception("Audio download succeeded but file is missing or too small.")
 
             update_status(download_id, {
                 "status": "completed",
@@ -106,23 +105,22 @@ def start_audio_download(url, headers=None, audio_quality='192'):
         except yt_dlp.utils.DownloadError as e:
             msg = str(e).lower()
             error_msg = (
-                "❌ Format not available for selected quality." if "requested format not available" in msg else
-                "🔐 Login required or session expired." if "sign in" in msg else
+                "❌ Format not available." if "requested format" in msg else
+                "🔐 Login required or expired session." if "sign in" in msg else
                 "❌ Audio download failed."
             )
-            print(f"[AUDIO DL ❌] {e}")
+            print(f"[AUDIO DL ERROR] {e}")
             update_status(download_id, {"status": "error", "error": error_msg})
 
         except Exception as e:
-            print(f"[AUDIO ERROR ❌] {e}")
+            print(f"[AUDIO EXCEPTION] {e}")
             traceback.print_exc()
-            update_status(download_id, {"status": "error", "error": "❌ Audio download failed unexpectedly."})
+            update_status(download_id, {"status": "error", "error": "❌ Unexpected audio download error."})
 
     thread = threading.Thread(target=run, daemon=True)
     _download_threads[download_id] = thread
     thread.start()
     return download_id
-
 
 # --- [Rest of your downloader.py remains unchanged below] ---
 

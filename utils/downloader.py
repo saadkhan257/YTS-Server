@@ -349,24 +349,24 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             height = ''.join(filter(str.isdigit, resolution))
             merged_headers = merge_headers_with_cookie(headers or {}, platform)
 
-            # ✨ Force user-agent for YouTube Shorts
-            merged_headers["User-Agent"] = (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0.0.0 Safari/537.36"
-            )
+            # ✅ Force modern user-agent (esp. for Shorts)
+            if "User-Agent" not in merged_headers:
+                merged_headers["User-Agent"] = (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/125.0.0.0 Safari/537.36"
+                )
 
             cookie_file = _prepare_cookie_file(headers, platform)
 
-            base_video = f"bestvideo[ext=mp4][height={height}]"
-            base_audio = f"bestaudio[ext=m4a]"
+            base_video = f"bestvideo[height={height}]"
+            base_audio = "bestaudio"
             if audio_lang:
                 base_audio += f"[language^{audio_lang}]"
 
-            # 🧠 Smart fallback format logic
             format_string = (
                 f"{base_video}+{base_audio}/"
-                f"bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+                f"bestvideo+bestaudio/"
                 f"best"
             )
 
@@ -435,7 +435,7 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
             msg = str(e).lower()
             error_msg = (
                 "🔐 Login or CAPTCHA required." if "sign in" in msg or "captcha" in msg else
-                "❌ Invalid video resolution or link." if "unsupported url" in msg else
+                "❌ Invalid video resolution or link." if "unsupported url" in msg or "no such format" in msg else
                 "❌ Download failed."
             )
             print(f"[YT-DLP ERROR] {e}")
@@ -450,7 +450,6 @@ def start_download(url, resolution, bandwidth_limit=None, headers=None, audio_la
     _download_threads[download_id] = thread
     thread.start()
     return download_id
-
 
 
 # --- Progress Hook & Controls ---

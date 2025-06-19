@@ -68,6 +68,8 @@ def parse_bandwidth_limit(limit):
 # --- Metadata ---
 
 def extract_ig_metadata(url, headers=None, download_id=None):
+    import collections
+
     download_id = download_id or str(uuid.uuid4())
     cancel_event = threading.Event()
     register_cancel_event(download_id, cancel_event)
@@ -76,7 +78,6 @@ def extract_ig_metadata(url, headers=None, download_id=None):
     try:
         merged_headers = merge_headers_with_cookie(headers or {}, "instagram")
         cookie_file = _prepare_cookie_file(headers)
-
         ydl_opts = {
             "quiet": True,
             "skip_download": True,
@@ -95,27 +96,57 @@ def extract_ig_metadata(url, headers=None, download_id=None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        duration = info.get("duration", 0)
         formats = info.get("formats", [])
-        seen = set()
-        resolutions, sizes = [], []
+        duration = info.get("duration") or 0
 
-        for f in formats:
-            height = f.get("height")
-            if not height or f.get("vcodec") == "none" or f.get("ext") != "mp4":
+        resolution_map = collections.OrderedDict()
+        seen = set()
+
+        for fmt in formats:
+            ext = fmt.get("ext")
+            vcodec = fmt.get("vcodec")
+            acodec = fmt.get("acodec")
+            height = fmt.get("height")
+            tbr = fmt.get("tbr")
+            fmt_id = fmt.get("format_id")
+
+            if not height or vcodec == "none" or ext != "mp4":
                 continue
+
             label = f"{height}p"
             if label in seen:
                 continue
             seen.add(label)
-            size = f.get("filesize") or f.get("filesize_approx")
-            if not size and f.get("tbr"):
-                size = (f["tbr"] * 1000 / 8) * duration
-            size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
-            resolutions.append(label)
-            sizes.append(size_str)
 
-        update_status(download_id, {"status": "ready"})
+            size = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+            if not size and tbr:
+                size = (tbr * 1000 / 8) * duration  # estimate in bytes
+            size_str = f"{round(size / 1024 / 1024, 2)}MB" if size else "Unknown"
+
+            resolution_map[label] = {
+                "label": label,
+                "height": height,
+                "ext": ext,
+                "vcodec": vcodec,
+                "acodec": acodec,
+                "format_id": fmt_id,
+                "size": size_str
+            }
+
+        resolutions = list(resolution_map.keys())
+        sizes = [v["size"] for v in resolution_map.values()]
+        videoFormats = list(resolution_map.values())
+
+        # Instagram usually has muxed formats, so we treat audio as part of main video
+        audioFormats = [{
+            "label": "Original",
+            "abr": "N/A",
+            "ext": "mp4",
+            "size": sizes[0] if sizes else "Unknown",
+            "format_id": videoFormats[0].get("format_id") if videoFormats else None
+        }]
+
+        update_status(download_id, {"status": "ready", "progress": 0})
 
         return {
             "download_id": download_id,
@@ -127,31 +158,29 @@ def extract_ig_metadata(url, headers=None, download_id=None):
             "video_url": url,
             "resolutions": resolutions,
             "sizes": sizes,
-            "audioFormats": [{
-                "label": "Original",
-                "abr": "N/A",
-                "size": sizes[0] if sizes else "Unknown"
-            }],
+            "videoFormats": videoFormats,
+            "audioFormats": audioFormats,
             "audio_dubs": []
         }
 
     except Exception as e:
         traceback.print_exc()
-        update_status(download_id, {"status": "error", "error": f"❌ Metadata extraction failed: {e}"})
+        update_status(download_id, {"status": "error", "error": f"❌ Metadata extraction failed: {e}"} )
         return {"error": str(e), "download_id": download_id}
-
-# --- Audio Download ---
 
 def start_ig_audio_download(url, headers=None, audio_quality="192"):
     download_id = str(uuid.uuid4())
-    filename = generate_filename("igaudio")
+    filename = generate_filename("ig_audio")
     output_path = os.path.join(AUDIO_DIR, f"{filename}.mp3")
     cancel_event = threading.Event()
     register_cancel_event(download_id, cancel_event)
 
     def run():
         update_status(download_id, {
-            "status": "starting", "progress": 0, "speed": "0KB/s", "audio_url": None
+            "status": "starting",
+            "progress": 0,
+            "speed": "0KB/s",
+            "audio_url": None
         })
 
         try:
@@ -164,18 +193,18 @@ def start_ig_audio_download(url, headers=None, audio_quality="192"):
                 "quiet": True,
                 "noplaylist": True,
                 "http_headers": merged_headers,
+                "cookiefile": cookie_file,
+                "proxy": GLOBAL_PROXY,
                 "progress_hooks": [lambda d: _progress_hook(d, download_id, cancel_event)],
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
                     "preferredquality": audio_quality
-                }]
+                }],
+                "user_agent": "Mozilla/5.0 (X11; Linux x86_64)",
+                "retries": 3,
+                "overwrites": True
             }
-
-            if cookie_file:
-                ydl_opts["cookiefile"] = cookie_file
-            if GLOBAL_PROXY:
-                ydl_opts["proxy"] = GLOBAL_PROXY
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -184,24 +213,30 @@ def start_ig_audio_download(url, headers=None, audio_quality="192"):
                 update_status(download_id, {"status": "cancelled"})
                 return
 
+            audio_url = f"{SERVER_URL}/audios/{os.path.basename(output_path)}"
+            size_mb = round(os.path.getsize(output_path) / 1024 / 1024, 2)
+
             update_status(download_id, {
                 "status": "completed",
                 "progress": 100,
                 "speed": "0KB/s",
-                "audio_url": f"{SERVER_URL}/audios/{os.path.basename(output_path)}"
+                "audio_url": audio_url
             })
 
             save_to_history({
                 "id": download_id,
                 "title": os.path.basename(output_path),
-                "resolution": "MP3",
+                "resolution": f"{audio_quality}K MP3",
                 "status": "completed",
-                "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
+                "size": size_mb
             })
 
         except Exception as e:
             traceback.print_exc()
-            update_status(download_id, {"status": "error", "error": "❌ Instagram audio download failed"})
+            update_status(download_id, {
+                "status": "error",
+                "error": f"❌ Instagram audio download failed: {str(e)[:200]}"
+            })
 
     thread = threading.Thread(target=run, daemon=True)
     register_thread(download_id, thread)
@@ -212,14 +247,28 @@ def start_ig_audio_download(url, headers=None, audio_quality="192"):
 
 def start_ig_video_download(url, resolution, headers=None, audio_lang=None, bandwidth_limit=None):
     download_id = str(uuid.uuid4())
-    filename = generate_filename("ig")
+    filename = generate_filename("ig_vid")
     output_path = os.path.join(VIDEO_DIR, f"{filename}.mp4")
     cancel_event = threading.Event()
     register_cancel_event(download_id, cancel_event)
 
+    def parse_bandwidth_limit(limit):
+        try:
+            if isinstance(limit, (int, float)):
+                return limit * 1024
+            s = str(limit).strip().upper()
+            unit = s[-1]
+            val = float(s[:-1])
+            return val * {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}.get(unit, 1)
+        except:
+            return None
+
     def run():
         update_status(download_id, {
-            "status": "starting", "progress": 0, "speed": "0KB/s", "video_url": None
+            "status": "starting",
+            "progress": 0,
+            "speed": "0KB/s",
+            "video_url": None
         })
 
         try:
@@ -227,28 +276,36 @@ def start_ig_video_download(url, resolution, headers=None, audio_lang=None, band
             cookie_file = _prepare_cookie_file(headers)
             height = resolution.replace("p", "")
 
+            # Main format string
+            video_fmt = f"bestvideo[ext=mp4][height={height}]"
+            audio_fmt = "bestaudio[ext=m4a]"
+            if audio_lang:
+                audio_fmt += f"[language^{audio_lang}]"
+
+            format_string = f"{video_fmt}+{audio_fmt}/best[ext=mp4][height={height}]/best"
+
             ydl_opts = {
-                "format": f"bestvideo[ext=mp4][height={height}]+bestaudio[ext=m4a]/best[ext=mp4][height={height}]",
+                "format": format_string,
                 "outtmpl": output_path,
                 "quiet": True,
                 "noplaylist": True,
                 "merge_output_format": "mp4",
                 "http_headers": merged_headers,
+                "cookiefile": cookie_file,
+                "proxy": GLOBAL_PROXY,
                 "progress_hooks": [lambda d: _progress_hook(d, download_id, cancel_event)],
                 "postprocessors": [{
                     "key": "FFmpegVideoConvertor",
                     "preferedformat": "mp4"
-                }]
+                }],
+                "user_agent": "Mozilla/5.0 (X11; Linux x86_64)",
+                "retries": 3,
+                "overwrites": True
             }
 
-            if cookie_file:
-                ydl_opts["cookiefile"] = cookie_file
-            if GLOBAL_PROXY:
-                ydl_opts["proxy"] = GLOBAL_PROXY
-
-            rate = parse_bandwidth_limit(bandwidth_limit)
-            if rate:
-                ydl_opts["ratelimit"] = rate
+            rl = parse_bandwidth_limit(bandwidth_limit)
+            if rl:
+                ydl_opts["ratelimit"] = rl
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -257,6 +314,7 @@ def start_ig_video_download(url, resolution, headers=None, audio_lang=None, band
                 update_status(download_id, {"status": "cancelled"})
                 return
 
+            size_mb = round(os.path.getsize(output_path) / 1024 / 1024, 2)
             update_status(download_id, {
                 "status": "completed",
                 "progress": 100,
@@ -269,12 +327,15 @@ def start_ig_video_download(url, resolution, headers=None, audio_lang=None, band
                 "title": os.path.basename(output_path),
                 "resolution": resolution,
                 "status": "completed",
-                "size": round(os.path.getsize(output_path) / 1024 / 1024, 2)
+                "size": size_mb
             })
 
         except Exception as e:
             traceback.print_exc()
-            update_status(download_id, {"status": "error", "error": "❌ Instagram video download failed"})
+            update_status(download_id, {
+                "status": "error",
+                "error": f"❌ Instagram video download failed: {str(e)[:200]}"
+            })
 
     thread = threading.Thread(target=run, daemon=True)
     register_thread(download_id, thread)

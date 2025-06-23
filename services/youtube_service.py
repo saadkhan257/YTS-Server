@@ -6,6 +6,8 @@ import string
 import yt_dlp
 import traceback
 import tempfile
+from youtubesearchpython import VideosSearch
+
 
 from config import VIDEO_DIR, AUDIO_DIR, SERVER_URL
 from utils.platform_helper import (
@@ -287,3 +289,34 @@ def _progress_hook(d, download_id):
         "progress": percent,
         "speed": speed_str
     })
+def search_youtube(query, limit=100):
+    all_results = []
+    search = VideosSearch(query, limit=20)
+
+    while len(all_results) < limit:
+        try:
+            result = search.result()
+        except Exception as e:
+            print(f"[YT SEARCH ERROR] {e}")
+            break
+
+        videos = result.get("result", [])
+        for video in videos:
+            all_results.append({
+                "title": video.get("title"),
+                "videoId": video.get("id"),
+                "url": video.get("link"),
+                "channel": video.get("channel", {}).get("name"),
+                "channelId": video.get("channel", {}).get("id"),
+                "duration": video.get("duration"),
+                "viewCount": video.get("viewCount", {}).get("short"),
+                "publishedTime": video.get("publishedTime"),
+                "thumbnails": video.get("thumbnails", []),
+                "description": video.get("descriptionSnippet", []),
+            })
+
+        if not search.hasNext():
+            break
+        search.next()
+
+    return all_results[:limit]

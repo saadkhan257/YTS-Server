@@ -475,13 +475,12 @@ def search_youtube(query, limit=20):
     try:
         # Load cookie path if available
         cookie_path = get_cookie_file_for_platform("youtube")
-        if not cookie_path or not os.path.isfile(cookie_path):
+        if not os.path.isfile(cookie_path):
             print(f"[COOKIES] ⚠️ YouTube cookie file not found at {cookie_path}")
             cookie_path = None
         else:
             print(f"[COOKIES] ✅ Using YouTube cookies from: {cookie_path}")
 
-        # yt-dlp search config
         ydl_opts = {
             'quiet': True,
             'extract_flat': 'in_playlist',
@@ -498,18 +497,48 @@ def search_youtube(query, limit=20):
 
         entries = search_result.get("entries", [])
         for entry in entries:
-            results.append({
-                "title": entry.get("title"),
-                "videoId": entry.get("id"),
-                "url": entry.get("webpage_url") or f"https://youtube.com/watch?v={entry.get('id')}",
-                "channel": entry.get("uploader"),
-                "channelId": entry.get("channel_id"),
-                "duration": str(entry.get("duration") or 0),
-                "viewCount": str(entry.get("view_count") or "0"),
-                "publishedTime": entry.get("upload_date"),
-                "thumbnails": [entry.get("thumbnail")],
-                "description": entry.get("description"),
-            })
+            video_id = entry.get("id")
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+            try:
+                # Try fetching full info if thumbnail or other fields missing
+                if not entry.get("thumbnail") or not entry.get("duration"):
+                    with yt_dlp.YoutubeDL({
+                        'quiet': True,
+                        'skip_download': True,
+                        'forcejson': True,
+                        'nocheckcertificate': True,
+                        'cookiefile': cookie_path
+                    }) as ydl:
+                        entry = ydl.extract_info(video_url, download=False)
+
+                results.append({
+                    "title": entry.get("title"),
+                    "videoId": video_id,
+                    "url": video_url,
+                    "channel": entry.get("uploader"),
+                    "channelId": entry.get("channel_id"),
+                    "duration": str(entry.get("duration") or "0"),
+                    "viewCount": str(entry.get("view_count") or "0"),
+                    "publishedTime": entry.get("upload_date", ""),
+                    "thumbnails": [entry.get("thumbnail")] if entry.get("thumbnail") else [],
+                    "description": entry.get("description", "")
+                })
+
+            except Exception as e:
+                print(f"[YT-METADATA WARNING] Couldn't fetch full info: {e}")
+                results.append({
+                    "title": entry.get("title"),
+                    "videoId": video_id,
+                    "url": video_url,
+                    "channel": entry.get("uploader", ""),
+                    "channelId": entry.get("channel_id", ""),
+                    "duration": "0",
+                    "viewCount": "0",
+                    "publishedTime": "",
+                    "thumbnails": [],
+                    "description": ""
+                })
 
         return results[:limit]
 

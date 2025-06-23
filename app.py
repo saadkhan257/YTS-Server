@@ -3,8 +3,10 @@ import json
 import threading
 from flask import Flask, request, jsonify, send_from_directory, make_response, Response, abort, session
 from flask_cors import CORS
+import yt_dlp
 
-from utils.downloader import get_video_info, start_download, cancel_download
+
+from utils.downloader import extract_metadata, get_video_info, start_download, cancel_download
 from utils.status_manager import get_status
 from utils.history_manager import load_history
 from utils.cleanup import cleanup_old_files, cleanup_old_videos
@@ -170,23 +172,6 @@ def login():
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
-# ✅ YouTube Search Route
-@app.route('/api/search', methods=['POST'])
-def youtube_search():
-    try:
-        data = request.get_json(force=True)
-        query = data.get('query', '').strip()
-        if not query:
-            return jsonify({'error': 'Search query is required'}), 400
-
-        print(f"[SEARCH] Query: {query}")
-        results = search_youtube(query)
-        return jsonify({'results': results})
-    except Exception as e:
-        print(f"[SEARCH ❌] {e}")
-        return jsonify({'error': f'Search failed: {str(e)}'}), 500
-
-
 # ✅ Built-in Terminal
 @app.route('/api/exec', methods=['POST'])
 def exec_code():
@@ -201,6 +186,51 @@ def exec_code():
         return jsonify({'output': local_vars})
     except Exception as e:
         return jsonify({'error': str(e)})
+    
+    # ✅ Add this new route at the bottom just before /api/exec
+@app.route('/search', methods=['POST'])
+def search_videos():
+    try:
+        data = request.get_json(force=True)
+        query = data.get('query', '').strip()
+        if not query:
+            return jsonify({'error': 'Query is required'}), 400
+
+        # 🔍 Use yt-dlp to search YouTube
+        with yt_dlp.YoutubeDL({
+            'quiet': True,
+            'extract_flat': 'in_playlist',
+            'skip_download': True,
+            'default_search': 'ytsearch10',
+        }) as ydl:
+            info = ydl.extract_info(query, download=False)
+
+        entries = info.get('entries', [])
+        results = []
+
+        for item in entries:
+            try:
+                meta = extract_metadata(item.get('webpage_url', item.get('id')))
+                results.append(meta)
+            except Exception:
+                results.append({
+                    'platform': 'YouTube',
+                    'title': item.get('title', ''),
+                    'thumbnail': item.get('thumbnail', ''),
+                    'uploader': item.get('uploader', ''),
+                    'duration': str(item.get('duration', '0')),
+                    'video_url': item.get('webpage_url', ''),
+                    'resolutions': [],
+                    'sizes': [],
+                    'audio_dubs': [],
+                    'audioFormats': [],
+                })
+
+        return jsonify(results)
+
+    except Exception as e:
+        return jsonify({'error': f'Search failed: {str(e)}'}), 500
+
 
 # ✅ Dummy Routes (block bots)
 @app.route('/favicon.ico')

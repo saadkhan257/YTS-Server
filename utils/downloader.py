@@ -482,31 +482,30 @@ def search_youtube(query, limit=20):
     else:
         print(f"[COOKIES] ✅ Using YouTube cookies from: {cookie_path}")
 
-    # Main yt-dlp search opts
-    ydl_opts = {
-        'quiet': True,
-        'extract_flat': True,
-        'default_search': f'ytsearch{limit}',
-        'skip_download': True,
-        'nocheckcertificate': True,
-        'forcejson': True,
-    }
-
-    if cookie_path:
-        ydl_opts['cookiefile'] = cookie_path
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
+        search_query = f"ytsearch{limit}:{query}"
 
-        entries = info.get("entries", [])
+        ydl_opts = {
+            'quiet': True,
+            'extract_flat': True,
+            'skip_download': True,
+            'nocheckcertificate': True,
+        }
+
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            search_result = ydl.extract_info(search_query, download=False)
+
+        entries = search_result.get("entries", [])
         print(f"[YT SEARCH] ✅ Found {len(entries)} entries")
 
         for entry in entries:
             video_id = entry.get("id")
             video_url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
 
-            # Fallback to full metadata if missing
+            # Fallback if info is missing
             if not entry.get("thumbnail") or not entry.get("duration"):
                 try:
                     with yt_dlp.YoutubeDL({
@@ -518,7 +517,7 @@ def search_youtube(query, limit=20):
                     }) as detail_ydl:
                         entry = detail_ydl.extract_info(video_url, download=False)
                 except Exception as detail_error:
-                    print(f"[YT-FALLBACK ❌] Failed to fetch full info for {video_url}: {detail_error}")
+                    print(f"[YT-FALLBACK ❌] Failed full info for {video_url}: {detail_error}")
 
             results.append({
                 "title": entry.get("title", "Unknown Title"),
@@ -538,3 +537,4 @@ def search_youtube(query, limit=20):
     except Exception as e:
         print(f"[YT SEARCH ERROR ❌] {e}")
         return []
+

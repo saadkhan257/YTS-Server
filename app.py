@@ -115,16 +115,33 @@ def download():
         url = data.get('url', '').strip()
         quality = data.get('quality', '').strip()
         type_ = data.get('type', 'video').strip().lower()  # 'audio' or 'video'
+        headers = dict(request.headers)
+        language = data.get('language')
 
         if not url or not quality:
             return jsonify({'error': 'Missing URL or quality'}), 400
 
         print(f"[DOWNLOAD] Starting for: {url} [{type_}]")
 
-        download_id = start_download(url, quality, type_)
-        return jsonify({'download_id': download_id, 'status': 'started'})
+        if type_ == 'audio':
+            from utils.downloader import start_audio_download
+            download_id = start_audio_download(url, headers=headers, audio_quality=quality)
+            filename = f"audio_{download_id}.mp3"
+            download_url = f"{request.host_url}audios/{filename}"
+        else:
+            download_id = start_download(url, resolution=quality, headers=headers, audio_lang=language)
+            filename = f"YTSx_{download_id}.mp4"  # ✅ matches what your downloader uses
+            download_url = f"{request.host_url}videos/{filename}"
+
+        return jsonify({
+            'download_id': download_id,
+            'download_url': download_url,
+            'status': 'started'
+        })
+
     except Exception as e:
         return jsonify({'error': f'Failed to start download: {str(e)}'}), 500
+
 
 # ✅ Cancel Download
 @app.route('/cancel/<download_id>', methods=['POST'])

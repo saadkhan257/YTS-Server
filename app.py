@@ -8,6 +8,8 @@ from utils.downloader import get_video_info, start_download, cancel_download
 from utils.status_manager import get_status
 from utils.history_manager import load_history
 from utils.cleanup import cleanup_old_files, cleanup_old_videos
+from utils.downloader import search_youtube
+
 # ✅ Initialize Flask App
 app = Flask(__name__)
 CORS(app)
@@ -167,6 +169,23 @@ def login():
         session['authenticated'] = True
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
+
+# ✅ YouTube Search Route
+@app.route('/api/search', methods=['POST'])
+def youtube_search():
+    try:
+        data = request.get_json(force=True)
+        query = data.get('query', '').strip()
+        if not query:
+            return jsonify({'error': 'Search query is required'}), 400
+
+        print(f"[SEARCH] Query: {query}")
+        results = search_youtube(query)
+        return jsonify({'results': results})
+    except Exception as e:
+        print(f"[SEARCH ❌] {e}")
+        return jsonify({'error': f'Search failed: {str(e)}'}), 500
+
 
 # ✅ Built-in Terminal
 @app.route('/api/exec', methods=['POST'])

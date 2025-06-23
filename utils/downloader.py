@@ -468,34 +468,51 @@ def resume_download(download_id):
 def get_video_info(url, headers=None, download_id=None):
     return extract_metadata(url, headers=headers, download_id=download_id)
 
-def search_youtube(query, limit=100):
-    all_results = []
-    search = VideosSearch(query, limit=20)
+def search_youtube(query, limit=20):
+    print(f"[YT SEARCH] Searching for: {query} (limit={limit})")
+    results = []
 
-    while len(all_results) < limit:
-        try:
-            result = search.result()
-        except Exception as e:
-            print(f"[YT SEARCH ERROR] {e}")
-            break
+    try:
+        # Load cookie path if available
+        cookie_path = get_cookie_file_for_platform("youtube")
+        if not cookie_path or not os.path.isfile(cookie_path):
+            print(f"[COOKIES] ⚠️ YouTube cookie file not found at {cookie_path}")
+            cookie_path = None
+        else:
+            print(f"[COOKIES] ✅ Using YouTube cookies from: {cookie_path}")
 
-        videos = result.get("result", [])
-        for video in videos:
-            all_results.append({
-                "title": video.get("title"),
-                "videoId": video.get("id"),
-                "url": video.get("link"),
-                "channel": video.get("channel", {}).get("name"),
-                "channelId": video.get("channel", {}).get("id"),
-                "duration": video.get("duration"),
-                "viewCount": video.get("viewCount", {}).get("short"),
-                "publishedTime": video.get("publishedTime"),
-                "thumbnails": video.get("thumbnails", []),
-                "description": video.get("descriptionSnippet", []),
+        # yt-dlp search config
+        ydl_opts = {
+            'quiet': True,
+            'extract_flat': 'in_playlist',
+            'default_search': f'ytsearch{limit}',
+            'skip_download': True,
+            'nocheckcertificate': True,
+        }
+
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            search_result = ydl.extract_info(query, download=False)
+
+        entries = search_result.get("entries", [])
+        for entry in entries:
+            results.append({
+                "title": entry.get("title"),
+                "videoId": entry.get("id"),
+                "url": entry.get("webpage_url") or f"https://youtube.com/watch?v={entry.get('id')}",
+                "channel": entry.get("uploader"),
+                "channelId": entry.get("channel_id"),
+                "duration": str(entry.get("duration") or 0),
+                "viewCount": str(entry.get("view_count") or "0"),
+                "publishedTime": entry.get("upload_date"),
+                "thumbnails": [entry.get("thumbnail")],
+                "description": entry.get("description"),
             })
 
-        if not search.hasNext():
-            break
-        search.next()
+        return results[:limit]
 
-    return all_results[:limit]
+    except Exception as e:
+        print(f"[YT SEARCH ERROR] ❌ {e}")
+        return []

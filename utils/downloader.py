@@ -469,79 +469,72 @@ def get_video_info(url, headers=None, download_id=None):
     return extract_metadata(url, headers=headers, download_id=download_id)
 
 def search_youtube(query, limit=20):
-    print(f"[YT SEARCH] Searching for: {query} (limit={limit})")
+    from utils.platform_helper import get_cookie_file_for_platform
+
+    print(f"[YT SEARCH] 🔍 Searching for: {query} (limit={limit})")
     results = []
 
+    # Load YouTube cookies
+    cookie_path = get_cookie_file_for_platform("youtube")
+    if not cookie_path or not os.path.isfile(cookie_path):
+        print(f"[COOKIES] ⚠️ YouTube cookie file not found.")
+        cookie_path = None
+    else:
+        print(f"[COOKIES] ✅ Using YouTube cookies from: {cookie_path}")
+
+    # Main yt-dlp search opts
+    ydl_opts = {
+        'quiet': True,
+        'extract_flat': True,
+        'default_search': f'ytsearch{limit}',
+        'skip_download': True,
+        'nocheckcertificate': True,
+        'forcejson': True,
+    }
+
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
+
     try:
-        # Load cookie path if available
-        cookie_path = get_cookie_file_for_platform("youtube")
-        if not os.path.isfile(cookie_path):
-            print(f"[COOKIES] ⚠️ YouTube cookie file not found at {cookie_path}")
-            cookie_path = None
-        else:
-            print(f"[COOKIES] ✅ Using YouTube cookies from: {cookie_path}")
-
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': 'in_playlist',
-            'default_search': f'ytsearch{limit}',
-            'skip_download': True,
-            'nocheckcertificate': True,
-        }
-
-        if cookie_path:
-            ydl_opts['cookiefile'] = cookie_path
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_result = ydl.extract_info(query, download=False)
+            info = ydl.extract_info(query, download=False)
 
-        entries = search_result.get("entries", [])
+        entries = info.get("entries", [])
+        print(f"[YT SEARCH] ✅ Found {len(entries)} entries")
+
         for entry in entries:
             video_id = entry.get("id")
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            video_url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
 
-            try:
-                # Try fetching full info if thumbnail or other fields missing
-                if not entry.get("thumbnail") or not entry.get("duration"):
+            # Fallback to full metadata if missing
+            if not entry.get("thumbnail") or not entry.get("duration"):
+                try:
                     with yt_dlp.YoutubeDL({
                         'quiet': True,
                         'skip_download': True,
                         'forcejson': True,
                         'nocheckcertificate': True,
                         'cookiefile': cookie_path
-                    }) as ydl:
-                        entry = ydl.extract_info(video_url, download=False)
+                    }) as detail_ydl:
+                        entry = detail_ydl.extract_info(video_url, download=False)
+                except Exception as detail_error:
+                    print(f"[YT-FALLBACK ❌] Failed to fetch full info for {video_url}: {detail_error}")
 
-                results.append({
-                    "title": entry.get("title"),
-                    "videoId": video_id,
-                    "url": video_url,
-                    "channel": entry.get("uploader"),
-                    "channelId": entry.get("channel_id"),
-                    "duration": str(entry.get("duration") or "0"),
-                    "viewCount": str(entry.get("view_count") or "0"),
-                    "publishedTime": entry.get("upload_date", ""),
-                    "thumbnails": [entry.get("thumbnail")] if entry.get("thumbnail") else [],
-                    "description": entry.get("description", "")
-                })
-
-            except Exception as e:
-                print(f"[YT-METADATA WARNING] Couldn't fetch full info: {e}")
-                results.append({
-                    "title": entry.get("title"),
-                    "videoId": video_id,
-                    "url": video_url,
-                    "channel": entry.get("uploader", ""),
-                    "channelId": entry.get("channel_id", ""),
-                    "duration": "0",
-                    "viewCount": "0",
-                    "publishedTime": "",
-                    "thumbnails": [],
-                    "description": ""
-                })
+            results.append({
+                "title": entry.get("title", "Unknown Title"),
+                "videoId": video_id,
+                "url": video_url,
+                "channel": entry.get("uploader", "Unknown Channel"),
+                "channelId": entry.get("channel_id", ""),
+                "duration": str(entry.get("duration") or "0"),
+                "viewCount": str(entry.get("view_count") or "0"),
+                "publishedTime": entry.get("upload_date", ""),
+                "thumbnails": [entry.get("thumbnail")] if entry.get("thumbnail") else [],
+                "description": entry.get("description", "")
+            })
 
         return results[:limit]
 
     except Exception as e:
-        print(f"[YT SEARCH ERROR] ❌ {e}")
+        print(f"[YT SEARCH ERROR ❌] {e}")
         return []
